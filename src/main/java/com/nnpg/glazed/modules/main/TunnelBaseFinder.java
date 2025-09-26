@@ -90,14 +90,13 @@ public class TunnelBaseFinder extends Module {
 
     // State
     private FacingDirection currentDirection;
-    private FacingDirection savedDirection;
     private boolean avoidingHazard = false;
-    private boolean returningToSavedDirection = false;
     private int detourBlocksRemaining = 0;
     private float targetYaw;
     private boolean rotatingToSafeYaw = false;
     private BlockPos rotationTargetBlock = null;
     private int rotationCooldownTicks = 0;
+    private final Random random = new Random();
 
     private final Map<BlockPos, SettingColor> detectedBlocks = new HashMap<>();
     private final int minY = -64;
@@ -112,7 +111,6 @@ public class TunnelBaseFinder extends Module {
         currentDirection = getInitialDirection();
         targetYaw = mc.player.getYaw();
         avoidingHazard = false;
-        returningToSavedDirection = false;
         detourBlocksRemaining = 0;
         rotationCooldownTicks = 0;
         rotatingToSafeYaw = false;
@@ -143,20 +141,16 @@ public class TunnelBaseFinder extends Module {
 
         if (rotatingToSafeYaw) {
             mc.options.forwardKey.setPressed(false);
-            mc.options.leftKey.setPressed(false);
-            mc.options.rightKey.setPressed(false);
-
             float currentYaw = mc.player.getYaw();
             if (Math.abs(targetYaw - currentYaw) < 1f) {
                 mc.player.setYaw(targetYaw);
                 rotatingToSafeYaw = false;
 
+                // break the first block after turning
                 if (rotationTargetBlock != null) {
-                    Vec3d center = Vec3d.ofCenter(rotationTargetBlock);
-                    lookAt(center);
+                    mineForward();
                     rotationTargetBlock = null;
                 }
-
                 rotationCooldownTicks = 10;
             }
             return;
@@ -171,40 +165,24 @@ public class TunnelBaseFinder extends Module {
                     if (detourBlocksRemaining > 0) {
                         mineForward();
                         detourBlocksRemaining--;
-                    } else if (!returningToSavedDirection) {
-                        targetYaw = getYawForDirection(savedDirection);
-                        currentDirection = savedDirection;
-                        returningToSavedDirection = true;
-                        rotationCooldownTicks = 30;
-                        detourBlocksRemaining = detourLength.get();
                     } else {
-                        if (detourBlocksRemaining > 0) {
-                            mineForward();
-                            detourBlocksRemaining--;
-                        } else {
-                            avoidingHazard = false;
-                            returningToSavedDirection = false;
-                        }
+                        avoidingHazard = false; // finished detour, keep going in new dir
                     }
                 } else {
                     FacingDirection hazardDir = detectHazards();
                     if (hazardDir == null) {
                         mineForward();
                     } else {
-                        savedDirection = currentDirection;
+                        // hazard detected -> pick random turn left/right
+                        boolean turnLeft = random.nextBoolean();
+                        FacingDirection newDir = turnLeft ? turnLeft(currentDirection) : turnRight(currentDirection);
+                        currentDirection = newDir;
+                        targetYaw = getYawForDirection(newDir);
 
-                        // Always turn 90° away from hazard
-                        if (hazardDir == currentDirection) {
-                            currentDirection = turnLeft(savedDirection);
-                            targetYaw = mc.player.getYaw() - 90f;
-                        } else {
-                            currentDirection = turnRight(savedDirection);
-                            targetYaw = mc.player.getYaw() + 90f;
-                        }
-
-                        rotationTargetBlock = mc.player.getBlockPos().offset(currentDirection.toMcDirection());
+                        rotationTargetBlock = mc.player.getBlockPos().offset(newDir.toMcDirection());
                         avoidingHazard = true;
                         rotatingToSafeYaw = true;
+                        detourBlocksRemaining = detourLength.get();
                         mc.options.forwardKey.setPressed(false);
                     }
                 }
@@ -233,22 +211,6 @@ public class TunnelBaseFinder extends Module {
         } else {
             mc.player.setYaw(currentYaw + Math.signum(delta) * step);
         }
-    }
-
-    private void lookAt(Vec3d target) {
-        if (mc.player == null) return;
-
-        Vec3d eyes = mc.player.getCameraPosVec(1.0f);
-        double diffX = target.x - eyes.x;
-        double diffY = target.y - eyes.y;
-        double diffZ = target.z - eyes.z;
-        double diffXZ = Math.sqrt(diffX * diffX + diffZ * diffZ);
-
-        float yaw = (float) (Math.toDegrees(Math.atan2(diffZ, diffX)) - 90.0F);
-        float pitch = (float) -(Math.toDegrees(Math.atan2(diffY, diffXZ)));
-
-        mc.player.setYaw(yaw);
-        mc.player.setPitch(pitch);
     }
 
     private FacingDirection getInitialDirection() {
@@ -298,7 +260,6 @@ public class TunnelBaseFinder extends Module {
             if (state.getBlock() == Blocks.LAVA || state.getBlock() == Blocks.WATER) {
                 warning("Hazard detected: " + state.getBlock().getName().getString() + " at " + pos.toShortString());
 
-                // Determine relative direction of hazard
                 if (pos.getX() > playerPos.getX()) return FacingDirection.EAST;
                 if (pos.getX() < playerPos.getX()) return FacingDirection.WEST;
                 if (pos.getZ() > playerPos.getZ()) return FacingDirection.SOUTH;
@@ -306,7 +267,7 @@ public class TunnelBaseFinder extends Module {
             }
         }
 
-        return null; // no hazards
+        return null;
     }
 
     private void notifyFound() {
