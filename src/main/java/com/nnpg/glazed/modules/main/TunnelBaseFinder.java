@@ -90,6 +90,7 @@ public class TunnelBaseFinder extends Module {
 
     // State
     private FacingDirection currentDirection;
+    private FacingDirection lastDirection; // prevent going backwards
     private boolean rotatingToSafeYaw = false;
     private float targetYaw;
     private int rotationCooldownTicks = 0;
@@ -106,6 +107,7 @@ public class TunnelBaseFinder extends Module {
     @Override
     public void onActivate() {
         currentDirection = getInitialDirection();
+        lastDirection = currentDirection;
         targetYaw = mc.player.getYaw();
         rotationCooldownTicks = 0;
         rotatingToSafeYaw = false;
@@ -145,7 +147,11 @@ public class TunnelBaseFinder extends Module {
                 BlockPos bp = mc.player.getBlockPos();
                 mc.player.setPosition(bp.getX() + 0.5, mc.player.getY(), bp.getZ() + 0.5);
 
-                rotationCooldownTicks = 10;
+                rotationCooldownTicks = 5;
+
+                // resume mining after rotation
+                mc.options.forwardKey.setPressed(true);
+                mineForward();
             }
             return;
         }
@@ -153,21 +159,26 @@ public class TunnelBaseFinder extends Module {
         if (autoWalkMine.get()) {
             int y = mc.player.getBlockY();
             if (y <= maxY && y >= minY) {
-                // check hazard
                 if (detectHazards()) {
-                    mc.options.forwardKey.setPressed(true); // walk forward without mining
+                    mc.options.forwardKey.setPressed(true); // walk until rotation
                     BlockPos front = mc.player.getBlockPos().offset(currentDirection.toMcDirection());
                     if (!mc.world.getBlockState(front).isAir()) {
-                        // bumped into block -> stop & rotate left or right
                         mc.options.forwardKey.setPressed(false);
-                        boolean turnLeft = random.nextBoolean();
-                        FacingDirection newDir = turnLeft ? turnLeft(currentDirection) : turnRight(currentDirection);
+
+                        // choose left or right but not backwards
+                        FacingDirection left = turnLeft(currentDirection);
+                        FacingDirection right = turnRight(currentDirection);
+
+                        FacingDirection newDir = random.nextBoolean() ? left : right;
+                        if (newDir == lastDirection) newDir = (newDir == left ? right : left);
+
+                        lastDirection = currentDirection;
                         currentDirection = newDir;
+
                         targetYaw = getYawForDirection(newDir);
                         rotatingToSafeYaw = true;
                     }
                 } else {
-                    // mine normally
                     mc.options.forwardKey.setPressed(true);
                     mineForward();
                 }
@@ -248,7 +259,6 @@ public class TunnelBaseFinder extends Module {
                 return true;
             }
         }
-
         return false;
     }
 
