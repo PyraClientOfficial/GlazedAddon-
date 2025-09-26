@@ -43,15 +43,6 @@ public class TunnelBaseFinder extends Module {
         .build()
     );
 
-    private final Setting<Integer> detourLength = sgGeneral.add(new IntSetting.Builder()
-        .name("detour-length")
-        .description("How many blocks to dig during hazard detour.")
-        .defaultValue(30)
-        .min(5)
-        .sliderMax(100)
-        .build()
-    );
-
     private final Setting<Integer> rotationSpeed = sgGeneral.add(new IntSetting.Builder()
         .name("rotation-speed")
         .description("How fast yaw turns per tick (degrees).")
@@ -91,10 +82,8 @@ public class TunnelBaseFinder extends Module {
     // State
     private FacingDirection currentDirection;
     private boolean avoidingHazard = false;
-    private int detourBlocksRemaining = 0;
-    private float targetYaw;
     private boolean rotatingToSafeYaw = false;
-    private BlockPos rotationTargetBlock = null;
+    private float targetYaw;
     private int rotationCooldownTicks = 0;
     private final Random random = new Random();
 
@@ -111,7 +100,6 @@ public class TunnelBaseFinder extends Module {
         currentDirection = getInitialDirection();
         targetYaw = mc.player.getYaw();
         avoidingHazard = false;
-        detourBlocksRemaining = 0;
         rotationCooldownTicks = 0;
         rotatingToSafeYaw = false;
         detectedBlocks.clear();
@@ -145,12 +133,6 @@ public class TunnelBaseFinder extends Module {
             if (Math.abs(targetYaw - currentYaw) < 1f) {
                 mc.player.setYaw(targetYaw);
                 rotatingToSafeYaw = false;
-
-                // break the first block after turning
-                if (rotationTargetBlock != null) {
-                    mineForward();
-                    rotationTargetBlock = null;
-                }
                 rotationCooldownTicks = 10;
             }
             return;
@@ -159,32 +141,23 @@ public class TunnelBaseFinder extends Module {
         if (autoWalkMine.get()) {
             int y = mc.player.getBlockY();
             if (y <= maxY && y >= minY) {
-                mc.options.forwardKey.setPressed(true);
-
-                if (avoidingHazard) {
-                    if (detourBlocksRemaining > 0) {
-                        mineForward();
-                        detourBlocksRemaining--;
-                    } else {
-                        avoidingHazard = false; // finished detour, keep going in new dir
-                    }
-                } else {
-                    FacingDirection hazardDir = detectHazards();
-                    if (hazardDir == null) {
-                        mineForward();
-                    } else {
-                        // hazard detected -> pick random turn left/right
+                // check hazard
+                if (detectHazards()) {
+                    mc.options.forwardKey.setPressed(true); // walk forward without mining
+                    BlockPos front = mc.player.getBlockPos().offset(currentDirection.toMcDirection());
+                    if (!mc.world.getBlockState(front).isAir()) {
+                        // bumped into block -> stop & rotate left or right
+                        mc.options.forwardKey.setPressed(false);
                         boolean turnLeft = random.nextBoolean();
                         FacingDirection newDir = turnLeft ? turnLeft(currentDirection) : turnRight(currentDirection);
                         currentDirection = newDir;
                         targetYaw = getYawForDirection(newDir);
-
-                        rotationTargetBlock = mc.player.getBlockPos().offset(newDir.toMcDirection());
-                        avoidingHazard = true;
                         rotatingToSafeYaw = true;
-                        detourBlocksRemaining = detourLength.get();
-                        mc.options.forwardKey.setPressed(false);
                     }
+                } else {
+                    // mine normally
+                    mc.options.forwardKey.setPressed(true);
+                    mineForward();
                 }
             } else {
                 mc.options.forwardKey.setPressed(false);
@@ -252,22 +225,18 @@ public class TunnelBaseFinder extends Module {
         }
     }
 
-    private FacingDirection detectHazards() {
+    private boolean detectHazards() {
         BlockPos playerPos = mc.player.getBlockPos();
 
-        for (BlockPos pos : BlockPos.iterateOutwards(playerPos, 10, 10, 10)) {
+        for (BlockPos pos : BlockPos.iterateOutwards(playerPos, 2, 2, 2)) {
             BlockState state = mc.world.getBlockState(pos);
             if (state.getBlock() == Blocks.LAVA || state.getBlock() == Blocks.WATER) {
                 warning("Hazard detected: " + state.getBlock().getName().getString() + " at " + pos.toShortString());
-
-                if (pos.getX() > playerPos.getX()) return FacingDirection.EAST;
-                if (pos.getX() < playerPos.getX()) return FacingDirection.WEST;
-                if (pos.getZ() > playerPos.getZ()) return FacingDirection.SOUTH;
-                if (pos.getZ() < playerPos.getZ()) return FacingDirection.NORTH;
+                return true;
             }
         }
 
-        return null;
+        return false;
     }
 
     private void notifyFound() {
