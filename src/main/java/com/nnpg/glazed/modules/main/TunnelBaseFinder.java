@@ -52,6 +52,15 @@ public class TunnelBaseFinder extends Module {
         .build()
     );
 
+    private final Setting<Integer> hazardDistance = sgGeneral.add(new IntSetting.Builder()
+        .name("hazard-distance")
+        .description("Distance to detect lava or water (blocks).")
+        .defaultValue(5)
+        .min(1)
+        .sliderMax(15)
+        .build()
+    );
+
     // Detection
     private final Setting<Integer> baseThreshold = sgDetect.add(new IntSetting.Builder()
         .name("base-threshold")
@@ -81,7 +90,6 @@ public class TunnelBaseFinder extends Module {
 
     // State
     private FacingDirection currentDirection;
-    private boolean avoidingHazard = false;
     private boolean rotatingToSafeYaw = false;
     private float targetYaw;
     private int rotationCooldownTicks = 0;
@@ -99,7 +107,6 @@ public class TunnelBaseFinder extends Module {
     public void onActivate() {
         currentDirection = getInitialDirection();
         targetYaw = mc.player.getYaw();
-        avoidingHazard = false;
         rotationCooldownTicks = 0;
         rotatingToSafeYaw = false;
         detectedBlocks.clear();
@@ -133,6 +140,11 @@ public class TunnelBaseFinder extends Module {
             if (Math.abs(targetYaw - currentYaw) < 1f) {
                 mc.player.setYaw(targetYaw);
                 rotatingToSafeYaw = false;
+
+                // center player in block
+                BlockPos bp = mc.player.getBlockPos();
+                mc.player.setPosition(bp.getX() + 0.5, mc.player.getY(), bp.getZ() + 0.5);
+
                 rotationCooldownTicks = 10;
             }
             return;
@@ -227,8 +239,9 @@ public class TunnelBaseFinder extends Module {
 
     private boolean detectHazards() {
         BlockPos playerPos = mc.player.getBlockPos();
+        int dist = hazardDistance.get();
 
-        for (BlockPos pos : BlockPos.iterateOutwards(playerPos, 2, 2, 2)) {
+        for (BlockPos pos : BlockPos.iterateOutwards(playerPos, dist, dist, dist)) {
             BlockState state = mc.world.getBlockState(pos);
             if (state.getBlock() == Blocks.LAVA || state.getBlock() == Blocks.WATER) {
                 warning("Hazard detected: " + state.getBlock().getName().getString() + " at " + pos.toShortString());
