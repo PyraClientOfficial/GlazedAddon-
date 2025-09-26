@@ -94,7 +94,6 @@ public class TunnelBaseFinder extends Module {
     private boolean rotatingToSafeYaw = false;
     private float targetYaw;
     private int rotationCooldownTicks = 0;
-    private final Random random = new Random();
 
     private boolean hazardActive = false; // prevents multiple rotations on the same hazard
 
@@ -146,16 +145,15 @@ public class TunnelBaseFinder extends Module {
                 mc.player.setYaw(targetYaw);
                 rotatingToSafeYaw = false;
 
-                // center player in block
+                // center player
                 BlockPos bp = mc.player.getBlockPos();
                 mc.player.setPosition(bp.getX() + 0.5, mc.player.getY(), bp.getZ() + 0.5);
 
                 rotationCooldownTicks = 5;
 
-                // resume mining after rotation
                 mc.options.forwardKey.setPressed(true);
                 mineForward();
-                hazardActive = true; // hazard handled, don’t rotate again until moved on
+                hazardActive = true; // finished handling hazard/drop
             }
             return;
         }
@@ -165,12 +163,11 @@ public class TunnelBaseFinder extends Module {
             if (y <= maxY && y >= minY) {
                 if (!hazardActive && (detectHazards() || detectFloorDrop())) {
                     mc.options.forwardKey.setPressed(false);
-                    chooseNewDirection();
+                    smartAvoid();
                 } else {
                     mc.options.forwardKey.setPressed(true);
                     mineForward();
 
-                    // reset hazardActive once hazard is behind us
                     if (hazardActive && !(detectHazards() || detectFloorDrop())) {
                         hazardActive = false;
                     }
@@ -202,6 +199,92 @@ public class TunnelBaseFinder extends Module {
         }
     }
 
+    private void mineForward() {
+        if (mc.player == null) return;
+
+        BlockPos playerPos = mc.player.getBlockPos();
+        BlockPos target = playerPos.offset(currentDirection.toMcDirection());
+
+        if (mc.world == null || mc.interactionManager == null) return;
+        BlockState state = mc.world.getBlockState(target);
+
+        if (!state.isAir() && state.getBlock() != Blocks.BEDROCK) {
+            mc.interactionManager.updateBlockBreakingProgress(target, currentDirection.toMcDirection());
+            mc.player.swingHand(Hand.MAIN_HAND);
+        }
+    }
+
+    private boolean detectHazards() {
+        BlockPos playerPos = mc.player.getBlockPos();
+        int dist = hazardDistance.get();
+
+        for (BlockPos pos : BlockPos.iterateOutwards(playerPos, dist, dist, dist)) {
+            BlockState state = mc.world.getBlockState(pos);
+            if (state.getBlock() == Blocks.LAVA || state.getBlock() == Blocks.WATER) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean detectFloorDrop() {
+        BlockPos playerPos = mc.player.getBlockPos();
+        BlockPos ahead = playerPos.offset(currentDirection.toMcDirection());
+
+        BlockPos floor1 = ahead.down();
+        BlockPos floor2 = ahead.down(2);
+
+        return mc.world.getBlockState(floor1).isAir() || mc.world.getBlockState(floor2).isAir();
+    }
+
+    /**
+     * Smart avoidance system:
+     * - Hazards: choose only safe dirs.
+     * - Drops: try ±90°, then check new left side to wrap around hole.
+     */
+    private void smartAvoid() {
+        FacingDirection left = turnLeft(currentDirection);
+        FacingDirection right = turnRight(currentDirection);
+
+        // Prefer left or right if safe
+        if (isSafe(left)) {
+            // wrap-around: check left side after turning
+            if (isSafe(turnLeft(left))) {
+                turnTo(turnLeft(left));
+            } else {
+                turnTo(left);
+            }
+        } else if (isSafe(right)) {
+            if (isSafe(turnRight(right))) {
+                turnTo(turnRight(right));
+            } else {
+                turnTo(right);
+            }
+        } else {
+            // if both unsafe, turn back
+            turnTo(opposite(currentDirection));
+        }
+    }
+
+    private boolean isSafe(FacingDirection dir) {
+        BlockPos ahead = mc.player.getBlockPos().offset(dir.toMcDirection());
+        BlockState aheadBlock = mc.world.getBlockState(ahead);
+
+        if (aheadBlock.getBlock() == Blocks.LAVA || aheadBlock.getBlock() == Blocks.WATER) return false;
+
+        BlockPos floor1 = ahead.down();
+        BlockPos floor2 = ahead.down(2);
+
+        return !(mc.world.getBlockState(floor1).isAir() || mc.world.getBlockState(floor2).isAir());
+    }
+
+    private void turnTo(FacingDirection dir) {
+        lastDirection = currentDirection;
+        currentDirection = dir;
+        targetYaw = getYawForDirection(dir);
+        rotatingToSafeYaw = true;
+    }
+
     private FacingDirection getInitialDirection() {
         float yaw = mc.player.getYaw() % 360.0f;
         if (yaw < 0.0f) yaw += 360.0f;
@@ -221,75 +304,7 @@ public class TunnelBaseFinder extends Module {
         };
     }
 
-    private void mineForward() {
-        if (mc.player == null) return;
-
-        BlockPos playerPos = mc.player.getBlockPos();
-        BlockPos target = switch (currentDirection) {
-            case NORTH -> playerPos.north();
-            case SOUTH -> playerPos.south();
-            case EAST -> playerPos.east();
-            case WEST -> playerPos.west();
-        };
-
-        if (mc.world == null || mc.interactionManager == null) return;
-        BlockState state = mc.world.getBlockState(target);
-
-        if (!state.isAir() && state.getBlock() != Blocks.BEDROCK) {
-            mc.interactionManager.updateBlockBreakingProgress(target, currentDirection.toMcDirection());
-            mc.player.swingHand(Hand.MAIN_HAND);
-        }
-    }
-
-    private boolean detectHazards() {
-        BlockPos playerPos = mc.player.getBlockPos();
-        int dist = hazardDistance.get();
-
-        for (BlockPos pos : BlockPos.iterateOutwards(playerPos, dist, dist, dist)) {
-            BlockState state = mc.world.getBlockState(pos);
-            if (state.getBlock() == Blocks.LAVA || state.getBlock() == Blocks.WATER) {
-                warning("Hazard detected: " + state.getBlock().getName().getString() + " at " + pos.toShortString());
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean detectFloorDrop() {
-        BlockPos playerPos = mc.player.getBlockPos();
-        BlockPos ahead = playerPos.offset(currentDirection.toMcDirection());
-
-        BlockPos floor1 = ahead.down();
-        BlockPos floor2 = ahead.down(2);
-
-        BlockState s1 = mc.world.getBlockState(floor1);
-        BlockState s2 = mc.world.getBlockState(floor2);
-
-        if (s1.isAir() || s2.isAir()) {
-            warning("Drop detected ahead at " + ahead.toShortString());
-            return true;
-        }
-        return false;
-    }
-
-    private void chooseNewDirection() {
-        FacingDirection left = turnLeft(currentDirection);
-        FacingDirection right = turnRight(currentDirection);
-        FacingDirection back = opposite(currentDirection);
-
-        FacingDirection newDir = null;
-
-        if (lastDirection != left) newDir = left;
-        if (lastDirection != right && (newDir == null || random.nextBoolean())) newDir = right;
-        if (newDir == null) newDir = back;
-
-        lastDirection = currentDirection;
-        currentDirection = newDir;
-
-        targetYaw = getYawForDirection(newDir);
-        rotatingToSafeYaw = true;
-    }
-
+    // --- Existing ESP + notify logic stays unchanged ---
     private void notifyFound() {
         int storage = 0;
         detectedBlocks.clear();
