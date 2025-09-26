@@ -96,6 +96,8 @@ public class TunnelBaseFinder extends Module {
     private int rotationCooldownTicks = 0;
     private final Random random = new Random();
 
+    private boolean hazardActive = false; // prevents multiple rotations on the same hazard
+
     private final Map<BlockPos, SettingColor> detectedBlocks = new HashMap<>();
     private final int minY = -64;
     private final int maxY = 0;
@@ -111,6 +113,7 @@ public class TunnelBaseFinder extends Module {
         targetYaw = mc.player.getYaw();
         rotationCooldownTicks = 0;
         rotatingToSafeYaw = false;
+        hazardActive = false;
         detectedBlocks.clear();
     }
 
@@ -152,6 +155,7 @@ public class TunnelBaseFinder extends Module {
                 // resume mining after rotation
                 mc.options.forwardKey.setPressed(true);
                 mineForward();
+                hazardActive = true; // hazard handled, don’t rotate again until moved on
             }
             return;
         }
@@ -159,7 +163,7 @@ public class TunnelBaseFinder extends Module {
         if (autoWalkMine.get()) {
             int y = mc.player.getBlockY();
             if (y <= maxY && y >= minY) {
-                if (detectHazards()) {
+                if (!hazardActive && detectHazards()) {
                     mc.options.forwardKey.setPressed(true); // walk until rotation
                     BlockPos front = mc.player.getBlockPos().offset(currentDirection.toMcDirection());
                     if (!mc.world.getBlockState(front).isAir()) {
@@ -186,6 +190,11 @@ public class TunnelBaseFinder extends Module {
                 } else {
                     mc.options.forwardKey.setPressed(true);
                     mineForward();
+
+                    // reset hazardActive once hazard is behind us
+                    if (hazardActive && !detectHazards()) {
+                        hazardActive = false;
+                    }
                 }
             } else {
                 mc.options.forwardKey.setPressed(false);
