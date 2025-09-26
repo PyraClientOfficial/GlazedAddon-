@@ -61,6 +61,15 @@ public class TunnelBaseFinder extends Module {
         .build()
     );
 
+    private final Setting<Integer> retreatDistance = sgGeneral.add(new IntSetting.Builder()
+        .name("retreat-distance")
+        .description("Blocks to walk back when doing a 180° retreat.")
+        .defaultValue(30)
+        .min(5)
+        .sliderMax(100)
+        .build()
+    );
+
     // Detection
     private final Setting<Integer> baseThreshold = sgDetect.add(new IntSetting.Builder()
         .name("base-threshold")
@@ -97,6 +106,9 @@ public class TunnelBaseFinder extends Module {
 
     private boolean hazardActive = false;
 
+    private int retreatSteps = 0;
+    private boolean forcedSideTurn = false;
+
     private final Map<BlockPos, SettingColor> detectedBlocks = new HashMap<>();
     private final int minY = -64;
     private final int maxY = 0;
@@ -114,6 +126,8 @@ public class TunnelBaseFinder extends Module {
         rotatingToSafeYaw = false;
         hazardActive = false;
         detectedBlocks.clear();
+        retreatSteps = 0;
+        forcedSideTurn = false;
     }
 
     @Override
@@ -123,6 +137,8 @@ public class TunnelBaseFinder extends Module {
         options.rightKey.setPressed(false);
         options.forwardKey.setPressed(false);
         detectedBlocks.clear();
+        retreatSteps = 0;
+        forcedSideTurn = false;
     }
 
     @EventHandler
@@ -170,6 +186,8 @@ public class TunnelBaseFinder extends Module {
                     if (hazardActive && !(detectHazards() || detectFloorDrop())) {
                         hazardActive = false; 
                     }
+
+                    if (retreatSteps > 0) retreatSteps--; // track retreat progress
                 }
             } else {
                 mc.options.forwardKey.setPressed(false);
@@ -237,17 +255,35 @@ public class TunnelBaseFinder extends Module {
     }
 
     private void smartAvoid() {
+        if (retreatSteps > 0) return; // already retreating
+
         FacingDirection left = turnLeft(currentDirection);
         FacingDirection right = turnRight(currentDirection);
 
-        // Prefer left/right turns first
-        if (isSafe(left)) {
+        boolean leftSafe = isSafe(left);
+        boolean rightSafe = isSafe(right);
+
+        if (leftSafe && !rightSafe) {
             turnTo(left);
-        } else if (isSafe(right)) {
+        } else if (rightSafe && !leftSafe) {
             turnTo(right);
+        } else if (leftSafe && rightSafe) {
+            // Randomize
+            if (mc.world.random.nextBoolean()) turnTo(left);
+            else turnTo(right);
         } else {
-            // only fallback if both sides unsafe
+            // Nothing safe -> retreat
             turnTo(opposite(currentDirection));
+            retreatSteps = retreatDistance.get();
+            forcedSideTurn = false;
+        }
+
+        // After retreat finishes, force a side turn
+        if (retreatSteps == 0 && !forcedSideTurn) {
+            FacingDirection forced = mc.world.random.nextBoolean() ? left : right;
+            if (!isSafe(forced)) forced = left; // fallback
+            turnTo(forced);
+            forcedSideTurn = true;
         }
     }
 
