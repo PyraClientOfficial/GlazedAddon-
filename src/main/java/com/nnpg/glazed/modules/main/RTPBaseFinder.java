@@ -1,22 +1,18 @@
 package com.nnpg.glazed.modules.main;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import meteordevelopment.meteorclient.events.entity.player.PlayerMoveEvent;
-import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
-import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.item.Items;
 import net.minecraft.item.ItemStack;
+import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 
 import java.util.Set;
-import java.util.HashSet;
 
 public class RTPBaseFinder extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -41,6 +37,7 @@ public class RTPBaseFinder extends Module {
 
     private long lastRtpTime = 0;
     private boolean digging = false;
+    private boolean clutching = false;
 
     private final Set<Block> storages = Set.of(
         Blocks.CHEST, Blocks.TRAPPED_CHEST, Blocks.BARREL, Blocks.SHULKER_BOX
@@ -61,6 +58,7 @@ public class RTPBaseFinder extends Module {
             mc.player.networkHandler.sendChatMessage("/rtp east");
             lastRtpTime = System.currentTimeMillis();
             digging = false;
+            clutching = false;
         }
     }
 
@@ -74,6 +72,27 @@ public class RTPBaseFinder extends Module {
         if (!digging && sinceRtp > 6000) {
             rotateDown();
             digging = true;
+        }
+
+        // Detect if falling and trigger clutch
+        if (mc.player.fallDistance > 3 && !clutching) {
+            if (tryMLG()) clutching = true;
+            return;
+        }
+
+        if (clutching) {
+            // After landing, pick up water
+            BlockPos feet = mc.player.getBlockPos();
+            if (mc.world.getBlockState(feet).getBlock() == Blocks.WATER) {
+                int bucketSlot = findHotbarSlot(Items.BUCKET);
+                if (bucketSlot != -1) {
+                    mc.player.getInventory().selectedSlot = bucketSlot;
+                    mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+                }
+                clutching = false;
+                digging = true;
+            }
+            return;
         }
 
         if (digging) {
@@ -97,8 +116,8 @@ public class RTPBaseFinder extends Module {
 
         if (mc.world.getBlockState(below).isAir()) return;
 
-        int pickSlot = findHotbarSlot(Items.DIAMOND_PICKAXE);
-        if (pickSlot == -1) pickSlot = findHotbarSlot(Items.NETHERITE_PICKAXE);
+        int pickSlot = findHotbarSlot(Items.NETHERITE_PICKAXE);
+        if (pickSlot == -1) pickSlot = findHotbarSlot(Items.DIAMOND_PICKAXE);
 
         if (pickSlot != -1) {
             mc.player.getInventory().selectedSlot = pickSlot;
@@ -117,8 +136,18 @@ public class RTPBaseFinder extends Module {
         }
 
         if (found >= baseDetectionAmount.get()) {
-            mc.player.networkHandler.getConnection().disconnect("[RtpBaseFinder] Base Found");
+            mc.player.networkHandler.getConnection().disconnect(Text.literal("[RtpBaseFinder] Base Found"));
         }
+    }
+
+    private boolean tryMLG() {
+        int waterSlot = findHotbarSlot(Items.WATER_BUCKET);
+        if (waterSlot == -1) return false;
+
+        mc.player.getInventory().selectedSlot = waterSlot;
+        mc.player.setPitch(90); // look straight down
+        mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        return true;
     }
 
     private int findHotbarSlot(net.minecraft.item.Item item) {
