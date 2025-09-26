@@ -90,12 +90,12 @@ public class TunnelBaseFinder extends Module {
 
     // State
     private FacingDirection currentDirection;
-    private FacingDirection lastDirection; // prevent going backwards
+    private FacingDirection lastDirection; 
     private boolean rotatingToSafeYaw = false;
     private float targetYaw;
     private int rotationCooldownTicks = 0;
 
-    private boolean hazardActive = false; // prevents multiple rotations on the same hazard
+    private boolean hazardActive = false;
 
     private final Map<BlockPos, SettingColor> detectedBlocks = new HashMap<>();
     private final int minY = -64;
@@ -145,7 +145,6 @@ public class TunnelBaseFinder extends Module {
                 mc.player.setYaw(targetYaw);
                 rotatingToSafeYaw = false;
 
-                // center player
                 BlockPos bp = mc.player.getBlockPos();
                 mc.player.setPosition(bp.getX() + 0.5, mc.player.getY(), bp.getZ() + 0.5);
 
@@ -153,7 +152,7 @@ public class TunnelBaseFinder extends Module {
 
                 mc.options.forwardKey.setPressed(true);
                 mineForward();
-                hazardActive = true; // finished handling hazard/drop
+                hazardActive = true; 
             }
             return;
         }
@@ -169,7 +168,7 @@ public class TunnelBaseFinder extends Module {
                     mineForward();
 
                     if (hazardActive && !(detectHazards() || detectFloorDrop())) {
-                        hazardActive = false;
+                        hazardActive = false; 
                     }
                 }
             } else {
@@ -237,31 +236,17 @@ public class TunnelBaseFinder extends Module {
         return mc.world.getBlockState(floor1).isAir() || mc.world.getBlockState(floor2).isAir();
     }
 
-    /**
-     * Smart avoidance system:
-     * - Hazards: choose only safe dirs.
-     * - Drops: try ±90°, then check new left side to wrap around hole.
-     */
     private void smartAvoid() {
         FacingDirection left = turnLeft(currentDirection);
         FacingDirection right = turnRight(currentDirection);
 
-        // Prefer left or right if safe
+        // Prefer left/right turns first
         if (isSafe(left)) {
-            // wrap-around: check left side after turning
-            if (isSafe(turnLeft(left))) {
-                turnTo(turnLeft(left));
-            } else {
-                turnTo(left);
-            }
+            turnTo(left);
         } else if (isSafe(right)) {
-            if (isSafe(turnRight(right))) {
-                turnTo(turnRight(right));
-            } else {
-                turnTo(right);
-            }
+            turnTo(right);
         } else {
-            // if both unsafe, turn back
+            // only fallback if both sides unsafe
             turnTo(opposite(currentDirection));
         }
     }
@@ -304,7 +289,7 @@ public class TunnelBaseFinder extends Module {
         };
     }
 
-    // --- Existing ESP + notify logic stays unchanged ---
+    // === ESP + notify stays same ===
     private void notifyFound() {
         int storage = 0;
         detectedBlocks.clear();
