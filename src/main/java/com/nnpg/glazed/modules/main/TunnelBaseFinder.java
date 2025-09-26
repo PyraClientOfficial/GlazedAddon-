@@ -54,7 +54,7 @@ public class TunnelBaseFinder extends Module {
 
     private final Setting<Integer> hazardDistance = sgGeneral.add(new IntSetting.Builder()
         .name("hazard-distance")
-        .description("Distance to detect lava or water (blocks).")
+        .description("Distance to detect lava, water, or drops (blocks).")
         .defaultValue(5)
         .min(1)
         .sliderMax(15)
@@ -163,36 +163,15 @@ public class TunnelBaseFinder extends Module {
         if (autoWalkMine.get()) {
             int y = mc.player.getBlockY();
             if (y <= maxY && y >= minY) {
-                if (!hazardActive && detectHazards()) {
-                    mc.options.forwardKey.setPressed(true); // walk until rotation
-                    BlockPos front = mc.player.getBlockPos().offset(currentDirection.toMcDirection());
-                    if (!mc.world.getBlockState(front).isAir()) {
-                        mc.options.forwardKey.setPressed(false);
-
-                        // smart new direction: prefer left/right, fallback back
-                        FacingDirection left = turnLeft(currentDirection);
-                        FacingDirection right = turnRight(currentDirection);
-                        FacingDirection back = opposite(currentDirection);
-
-                        FacingDirection newDir = null;
-
-                        if (lastDirection != left) newDir = left;
-                        if (lastDirection != right && (newDir == null || random.nextBoolean())) newDir = right;
-
-                        if (newDir == null) newDir = back; // only if stuck
-
-                        lastDirection = currentDirection;
-                        currentDirection = newDir;
-
-                        targetYaw = getYawForDirection(newDir);
-                        rotatingToSafeYaw = true;
-                    }
+                if (!hazardActive && (detectHazards() || detectFloorDrop())) {
+                    mc.options.forwardKey.setPressed(false);
+                    chooseNewDirection();
                 } else {
                     mc.options.forwardKey.setPressed(true);
                     mineForward();
 
                     // reset hazardActive once hazard is behind us
-                    if (hazardActive && !detectHazards()) {
+                    if (hazardActive && !(detectHazards() || detectFloorDrop())) {
                         hazardActive = false;
                     }
                 }
@@ -274,6 +253,41 @@ public class TunnelBaseFinder extends Module {
             }
         }
         return false;
+    }
+
+    private boolean detectFloorDrop() {
+        BlockPos playerPos = mc.player.getBlockPos();
+        BlockPos ahead = playerPos.offset(currentDirection.toMcDirection());
+
+        BlockPos floor1 = ahead.down();
+        BlockPos floor2 = ahead.down(2);
+
+        BlockState s1 = mc.world.getBlockState(floor1);
+        BlockState s2 = mc.world.getBlockState(floor2);
+
+        if (s1.isAir() || s2.isAir()) {
+            warning("Drop detected ahead at " + ahead.toShortString());
+            return true;
+        }
+        return false;
+    }
+
+    private void chooseNewDirection() {
+        FacingDirection left = turnLeft(currentDirection);
+        FacingDirection right = turnRight(currentDirection);
+        FacingDirection back = opposite(currentDirection);
+
+        FacingDirection newDir = null;
+
+        if (lastDirection != left) newDir = left;
+        if (lastDirection != right && (newDir == null || random.nextBoolean())) newDir = right;
+        if (newDir == null) newDir = back;
+
+        lastDirection = currentDirection;
+        currentDirection = newDir;
+
+        targetYaw = getYawForDirection(newDir);
+        rotatingToSafeYaw = true;
     }
 
     private void notifyFound() {
