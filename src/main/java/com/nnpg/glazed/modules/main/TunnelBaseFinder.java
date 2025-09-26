@@ -165,12 +165,17 @@ public class TunnelBaseFinder extends Module {
                     if (!mc.world.getBlockState(front).isAir()) {
                         mc.options.forwardKey.setPressed(false);
 
-                        // choose left or right but not backwards
+                        // smart new direction: prefer left/right, fallback back
                         FacingDirection left = turnLeft(currentDirection);
                         FacingDirection right = turnRight(currentDirection);
+                        FacingDirection back = opposite(currentDirection);
 
-                        FacingDirection newDir = random.nextBoolean() ? left : right;
-                        if (newDir == lastDirection) newDir = (newDir == left ? right : left);
+                        FacingDirection newDir = null;
+
+                        if (lastDirection != left) newDir = left;
+                        if (lastDirection != right && (newDir == null || random.nextBoolean())) newDir = right;
+
+                        if (newDir == null) newDir = back; // only if stuck
 
                         lastDirection = currentDirection;
                         currentDirection = newDir;
@@ -243,7 +248,7 @@ public class TunnelBaseFinder extends Module {
         BlockState state = mc.world.getBlockState(target);
 
         if (!state.isAir() && state.getBlock() != Blocks.BEDROCK) {
-            mc.interactionManager.attackBlock(target, currentDirection.toMcDirection());
+            mc.interactionManager.updateBlockBreakingProgress(target, currentDirection.toMcDirection());
             mc.player.swingHand(Hand.MAIN_HAND);
         }
     }
@@ -336,6 +341,15 @@ public class TunnelBaseFinder extends Module {
             case EAST -> FacingDirection.SOUTH;
             case SOUTH -> FacingDirection.WEST;
             case WEST -> FacingDirection.NORTH;
+        };
+    }
+
+    private FacingDirection opposite(FacingDirection dir) {
+        return switch (dir) {
+            case NORTH -> FacingDirection.SOUTH;
+            case SOUTH -> FacingDirection.NORTH;
+            case EAST -> FacingDirection.WEST;
+            case WEST -> FacingDirection.EAST;
         };
     }
 
