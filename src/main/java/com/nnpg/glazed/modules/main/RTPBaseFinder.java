@@ -64,7 +64,6 @@ public class RTPBaseFinder extends Module {
         .build()
     );
 
-    private long lastRtpTime = 0;
     private boolean digging = false;
     private boolean clutching = false;
     private boolean rotating = false;
@@ -97,10 +96,9 @@ public class RTPBaseFinder extends Module {
     private void sendRtp() {
         if (mc.player != null) {
             mc.player.networkHandler.sendChatCommand("rtp " + rtpDirection.get().toLowerCase());
-            lastRtpTime = System.currentTimeMillis();
             digging = false;
             clutching = false;
-            rotating = false;
+            rotating = true; // rotate before digging
         }
     }
 
@@ -108,14 +106,7 @@ public class RTPBaseFinder extends Module {
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null) return;
 
-        long sinceRtp = System.currentTimeMillis() - lastRtpTime;
-
-        // Wait 6s after teleport before digging
-        if (!digging && sinceRtp > 6000) {
-            rotating = true; // start smooth rotation
-        }
-
-        // Smooth rotation logic
+        // Smooth rotation before digging
         if (rotating) {
             float currentPitch = mc.player.getPitch();
             float step = rotationSpeed.get().floatValue();
@@ -157,7 +148,7 @@ public class RTPBaseFinder extends Module {
             detectBase();
 
             int y = mc.player.getBlockY();
-            if (y <= yMin.get() || y > yMax.get()) {
+            if (y <= yMin.get()) {
                 sendRtp();
             }
         }
@@ -166,8 +157,10 @@ public class RTPBaseFinder extends Module {
     private void mineBelow() {
         BlockPos below = mc.player.getBlockPos().down();
 
+        // Skip if already broken
         if (mc.world.getBlockState(below).isAir()) return;
 
+        // Pick best pickaxe
         int pickSlot = -1;
         for (net.minecraft.item.Item pick : pickaxePriority) {
             pickSlot = findHotbarSlot(pick);
@@ -176,8 +169,8 @@ public class RTPBaseFinder extends Module {
 
         if (pickSlot != -1) {
             mc.player.getInventory().selectedSlot = pickSlot;
+            // Proper block breaking loop
             mc.interactionManager.attackBlock(below, Direction.DOWN);
-            mc.interactionManager.updateBlockBreakingProgress(below, Direction.DOWN);
             mc.player.swingHand(Hand.MAIN_HAND);
         }
     }
