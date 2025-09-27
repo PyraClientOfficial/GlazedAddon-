@@ -180,12 +180,25 @@ public class RTPBaseFinder extends Module {
             return;
         }
 
-        // New block target
+        // Creative mode → instant mine
+        if (mc.player.getAbilities().creativeMode) {
+            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
+            ));
+            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, below, Direction.DOWN
+            ));
+            mc.player.swingHand(Hand.MAIN_HAND);
+            miningBlock = null;
+            breakProgress = 0f;
+            return;
+        }
+
+        // Survival mode mining
         if (miningBlock == null || !miningBlock.equals(below)) {
             miningBlock = below;
             breakProgress = 0f;
 
-            // Start dig packet
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
                 PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
             ));
@@ -201,24 +214,18 @@ public class RTPBaseFinder extends Module {
 
         mc.player.getInventory().selectedSlot = pickSlot;
 
-        // Get block hardness (vanilla break speed)
         float delta = mc.world.getBlockState(below).calcBlockBreakingDelta(mc.player, mc.world, below);
         if (delta <= 0) return;
 
-        // Apply multiplier
         delta *= miningSpeed.get().floatValue();
-
         breakProgress += delta;
 
-        // Swing every tick for animation
         mc.player.swingHand(Hand.MAIN_HAND);
 
-        // Keep sending START_DESTROY_BLOCK until finished
         mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
             PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
         ));
 
-        // Break block when progress done
         if (breakProgress >= 1f) {
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
                 PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, below, Direction.DOWN
