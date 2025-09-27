@@ -20,7 +20,6 @@ import java.util.List;
 public class RTPBaseFinder extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
-    // Settings
     private final Setting<String> rtpDirection = sgGeneral.add(new StringSetting.Builder()
         .name("rtp-direction")
         .description("Which direction to /rtp in (east or west).")
@@ -65,23 +64,12 @@ public class RTPBaseFinder extends Module {
         .build()
     );
 
-    private final Setting<Double> miningSpeed = sgGeneral.add(new DoubleSetting.Builder()
-        .name("mining-speed")
-        .description("Multiplier for block breaking speed (1.0 = normal, 1.1 = 10% faster).")
-        .defaultValue(1.1)
-        .min(0.1)
-        .max(5.0)
-        .sliderMax(3.0)
-        .build()
-    );
-
     private boolean digging = false;
     private boolean clutching = false;
     private boolean rotating = false;
 
-    private float targetPitch = 90f; // looking straight down
+    private float targetPitch = 90f;
 
-    // Track current mining
     private BlockPos miningBlock = null;
     private float breakProgress = 0f;
 
@@ -113,7 +101,7 @@ public class RTPBaseFinder extends Module {
             mc.player.networkHandler.sendChatCommand("rtp " + rtpDirection.get().toLowerCase());
             digging = false;
             clutching = false;
-            rotating = true; // rotate before digging
+            rotating = true;
             miningBlock = null;
             breakProgress = 0f;
         }
@@ -123,7 +111,6 @@ public class RTPBaseFinder extends Module {
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null) return;
 
-        // Smooth rotation before digging
         if (rotating) {
             float currentPitch = mc.player.getPitch();
             float step = rotationSpeed.get().floatValue();
@@ -131,20 +118,18 @@ public class RTPBaseFinder extends Module {
             if (Math.abs(targetPitch - currentPitch) <= step) {
                 mc.player.setPitch(targetPitch);
                 rotating = false;
-                digging = true; // start digging once rotation is done
+                digging = true;
             } else {
                 float newPitch = currentPitch + Math.signum(targetPitch - currentPitch) * step;
                 mc.player.setPitch(newPitch);
             }
         }
 
-        // Falling check → try MLG
         if (mc.player.fallDistance > 3 && mc.player.getVelocity().y < -0.5 && !clutching) {
             if (tryMLG()) clutching = true;
             return;
         }
 
-        // After MLG, pick up water
         if (clutching) {
             BlockPos feet = mc.player.getBlockPos();
             if (mc.world.getBlockState(feet).getBlock() == Blocks.WATER) {
@@ -159,7 +144,6 @@ public class RTPBaseFinder extends Module {
             return;
         }
 
-        // Normal digging
         if (digging) {
             mineBelow();
             detectBase();
@@ -194,7 +178,7 @@ public class RTPBaseFinder extends Module {
             return;
         }
 
-        // Survival mode mining
+        // Survival mode mining (vanilla-like)
         if (miningBlock == null || !miningBlock.equals(below)) {
             miningBlock = below;
             breakProgress = 0f;
@@ -210,14 +194,11 @@ public class RTPBaseFinder extends Module {
             pickSlot = findHotbarSlot(pick);
             if (pickSlot != -1) break;
         }
-        if (pickSlot == -1) return;
-
-        mc.player.getInventory().selectedSlot = pickSlot;
+        if (pickSlot != -1) mc.player.getInventory().selectedSlot = pickSlot;
 
         float delta = mc.world.getBlockState(below).calcBlockBreakingDelta(mc.player, mc.world, below);
         if (delta <= 0) return;
 
-        delta *= miningSpeed.get().floatValue();
         breakProgress += delta;
 
         mc.player.swingHand(Hand.MAIN_HAND);
@@ -254,7 +235,7 @@ public class RTPBaseFinder extends Module {
         if (waterSlot == -1) return false;
 
         mc.player.getInventory().selectedSlot = waterSlot;
-        mc.player.setPitch(90); // look straight down
+        mc.player.setPitch(90);
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
         return true;
     }
