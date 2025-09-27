@@ -8,6 +8,7 @@ import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.item.Items;
 import net.minecraft.item.ItemStack;
+import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
@@ -64,13 +65,23 @@ public class RTPBaseFinder extends Module {
         .build()
     );
 
+    private final Setting<Double> miningSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("mining-speed")
+        .description("Multiplier for block breaking speed (1.0 = normal, 1.1 = 10% faster).")
+        .defaultValue(1.1)
+        .min(0.1)
+        .max(5.0)
+        .sliderMax(3.0)
+        .build()
+    );
+
     private boolean digging = false;
     private boolean clutching = false;
     private boolean rotating = false;
 
     private float targetPitch = 90f; // looking straight down
 
-    // Track current mining progress
+    // Track current mining
     private BlockPos miningBlock = null;
     private float breakProgress = 0f;
 
@@ -173,6 +184,11 @@ public class RTPBaseFinder extends Module {
         if (miningBlock == null || !miningBlock.equals(below)) {
             miningBlock = below;
             breakProgress = 0f;
+
+            // Start dig packet
+            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
+            ));
         }
 
         // Pick best pickaxe
@@ -189,8 +205,8 @@ public class RTPBaseFinder extends Module {
         float delta = mc.world.getBlockState(below).calcBlockBreakingDelta(mc.player, mc.world, below);
         if (delta <= 0) return;
 
-        // Apply 10% faster multiplier
-        delta *= 1.1f;
+        // Apply multiplier
+        delta *= miningSpeed.get().floatValue();
 
         breakProgress += delta;
 
@@ -199,9 +215,16 @@ public class RTPBaseFinder extends Module {
 
         // Break block when progress done
         if (breakProgress >= 1f) {
-            mc.interactionManager.attackBlock(below, Direction.DOWN);
+            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, below, Direction.DOWN
+            ));
             miningBlock = null;
             breakProgress = 0f;
+        } else {
+            // Continue breaking
+            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+                PlayerActionC2SPacket.Action.ABORT_DESTROY_BLOCK, below, Direction.DOWN
+            ));
         }
     }
 
