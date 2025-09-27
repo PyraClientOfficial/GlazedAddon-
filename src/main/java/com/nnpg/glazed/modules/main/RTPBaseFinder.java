@@ -185,7 +185,7 @@ public class RTPBaseFinder extends Module {
             miningBlock = below;
             breakProgress = 0f;
 
-            // Start dig packet
+            // Send start digging once
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
                 PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
             ));
@@ -213,18 +213,17 @@ public class RTPBaseFinder extends Module {
         // Swing every tick for animation
         mc.player.swingHand(Hand.MAIN_HAND);
 
-        // Break block when progress done
+        // Continue digging until finished
+        mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
+            PlayerActionC2SPacket.Action.CONTINUE_DESTROY_BLOCK, below, Direction.DOWN
+        ));
+
         if (breakProgress >= 1f) {
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
                 PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, below, Direction.DOWN
             ));
             miningBlock = null;
             breakProgress = 0f;
-        } else {
-            // Continue breaking
-            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.ABORT_DESTROY_BLOCK, below, Direction.DOWN
-            ));
         }
     }
 
