@@ -70,6 +70,10 @@ public class RTPBaseFinder extends Module {
 
     private float targetPitch = 90f; // looking straight down
 
+    // Track current mining progress
+    private BlockPos miningBlock = null;
+    private float breakProgress = 0f;
+
     private final Set<Block> storages = Set.of(
         Blocks.CHEST, Blocks.TRAPPED_CHEST, Blocks.BARREL, Blocks.SHULKER_BOX
     );
@@ -99,6 +103,8 @@ public class RTPBaseFinder extends Module {
             digging = false;
             clutching = false;
             rotating = true; // rotate before digging
+            miningBlock = null;
+            breakProgress = 0f;
         }
     }
 
@@ -157,8 +163,17 @@ public class RTPBaseFinder extends Module {
     private void mineBelow() {
         BlockPos below = mc.player.getBlockPos().down();
 
-        // Skip if already broken
-        if (mc.world.getBlockState(below).isAir()) return;
+        if (mc.world.getBlockState(below).isAir()) {
+            miningBlock = null;
+            breakProgress = 0f;
+            return;
+        }
+
+        // New block target
+        if (miningBlock == null || !miningBlock.equals(below)) {
+            miningBlock = below;
+            breakProgress = 0f;
+        }
 
         // Pick best pickaxe
         int pickSlot = -1;
@@ -166,12 +181,27 @@ public class RTPBaseFinder extends Module {
             pickSlot = findHotbarSlot(pick);
             if (pickSlot != -1) break;
         }
+        if (pickSlot == -1) return;
 
-        if (pickSlot != -1) {
-            mc.player.getInventory().selectedSlot = pickSlot;
-            // Proper block breaking loop
+        mc.player.getInventory().selectedSlot = pickSlot;
+
+        // Get block hardness (vanilla break speed)
+        float delta = mc.world.getBlockState(below).calcBlockBreakingDelta(mc.player, mc.world, below);
+        if (delta <= 0) return;
+
+        // Apply 10% faster multiplier
+        delta *= 1.1f;
+
+        breakProgress += delta;
+
+        // Swing every tick for animation
+        mc.player.swingHand(Hand.MAIN_HAND);
+
+        // Break block when progress done
+        if (breakProgress >= 1f) {
             mc.interactionManager.attackBlock(below, Direction.DOWN);
-            mc.player.swingHand(Hand.MAIN_HAND);
+            miningBlock = null;
+            breakProgress = 0f;
         }
     }
 
