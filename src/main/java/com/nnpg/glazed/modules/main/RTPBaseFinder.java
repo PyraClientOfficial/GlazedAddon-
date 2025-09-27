@@ -11,11 +11,21 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 
 import java.util.Set;
+import java.util.List;
 
 public class RTPBaseFinder extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    // Settings
+    private final Setting<String> rtpDirection = sgGeneral.add(new StringSetting.Builder()
+        .name("rtp-direction")
+        .description("Which direction to /rtp in (east or west).")
+        .defaultValue("east")
+        .build()
+    );
 
     private final Setting<Integer> baseDetectionAmount = sgGeneral.add(new IntSetting.Builder()
         .name("base-detection-amount")
@@ -26,25 +36,56 @@ public class RTPBaseFinder extends Module {
         .build()
     );
 
-    private final Setting<Integer> yLevelRtp = sgGeneral.add(new IntSetting.Builder()
-        .name("y-level-rtp")
-        .description("Y level to trigger another /rtp east.")
+    private final Setting<Integer> yMin = sgGeneral.add(new IntSetting.Builder()
+        .name("y-min")
+        .description("Lowest Y level before forcing another /rtp.")
+        .defaultValue(-50)
+        .min(-64)
+        .max(320)
+        .build()
+    );
+
+    private final Setting<Integer> yMax = sgGeneral.add(new IntSetting.Builder()
+        .name("y-max")
+        .description("Highest Y level before forcing another /rtp.")
         .defaultValue(20)
-        .min(0)
-        .max(256)
+        .min(-64)
+        .max(320)
+        .build()
+    );
+
+    private final Setting<Double> rotationSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("rotation-speed")
+        .description("Speed of player rotation (degrees per tick).")
+        .defaultValue(10.0)
+        .min(1.0)
+        .max(90.0)
+        .sliderMax(45.0)
         .build()
     );
 
     private long lastRtpTime = 0;
     private boolean digging = false;
     private boolean clutching = false;
+    private boolean rotating = false;
+
+    private float targetPitch = 90f; // looking straight down
 
     private final Set<Block> storages = Set.of(
         Blocks.CHEST, Blocks.TRAPPED_CHEST, Blocks.BARREL, Blocks.SHULKER_BOX
     );
 
+    private final List<net.minecraft.item.Item> pickaxePriority = List.of(
+        Items.NETHERITE_PICKAXE,
+        Items.DIAMOND_PICKAXE,
+        Items.IRON_PICKAXE,
+        Items.STONE_PICKAXE,
+        Items.GOLDEN_PICKAXE,
+        Items.WOODEN_PICKAXE
+    );
+
     public RTPBaseFinder() {
-        super(com.nnpg.glazed.GlazedAddon.CATEGORY, "rtp-base-finder", "Uses /rtp east and digs down to detect bases.");
+        super(com.nnpg.glazed.GlazedAddon.CATEGORY, "rtp-base-finder", "Uses /rtp and digs down to detect bases.");
     }
 
     @Override
@@ -55,10 +96,11 @@ public class RTPBaseFinder extends Module {
 
     private void sendRtp() {
         if (mc.player != null) {
-            mc.player.networkHandler.sendChatMessage("/rtp east");
+            mc.player.networkHandler.sendChatCommand("rtp " + rtpDirection.get().toLowerCase());
             lastRtpTime = System.currentTimeMillis();
             digging = false;
             clutching = false;
+            rotating = false;
         }
     }
 
@@ -68,20 +110,34 @@ public class RTPBaseFinder extends Module {
 
         long sinceRtp = System.currentTimeMillis() - lastRtpTime;
 
-        // Wait 6s before digging
+        // Wait 6s after teleport before digging
         if (!digging && sinceRtp > 6000) {
-            rotateDown();
-            digging = true;
+            rotating = true; // start smooth rotation
         }
 
-        // Detect if falling and trigger clutch
-        if (mc.player.fallDistance > 3 && !clutching) {
+        // Smooth rotation logic
+        if (rotating) {
+            float currentPitch = mc.player.getPitch();
+            float step = rotationSpeed.get().floatValue();
+
+            if (Math.abs(targetPitch - currentPitch) <= step) {
+                mc.player.setPitch(targetPitch);
+                rotating = false;
+                digging = true; // start digging once rotation is done
+            } else {
+                float newPitch = currentPitch + Math.signum(targetPitch - currentPitch) * step;
+                mc.player.setPitch(newPitch);
+            }
+        }
+
+        // Falling check → try MLG
+        if (mc.player.fallDistance > 3 && mc.player.getVelocity().y < -0.5 && !clutching) {
             if (tryMLG()) clutching = true;
             return;
         }
 
+        // After MLG, pick up water
         if (clutching) {
-            // After landing, pick up water
             BlockPos feet = mc.player.getBlockPos();
             if (mc.world.getBlockState(feet).getBlock() == Blocks.WATER) {
                 int bucketSlot = findHotbarSlot(Items.BUCKET);
@@ -95,33 +151,33 @@ public class RTPBaseFinder extends Module {
             return;
         }
 
+        // Normal digging
         if (digging) {
-            mineDown();
+            mineBelow();
             detectBase();
 
-            if (mc.player.getBlockY() <= yLevelRtp.get()) {
+            int y = mc.player.getBlockY();
+            if (y <= yMin.get() || y > yMax.get()) {
                 sendRtp();
             }
         }
     }
 
-    private void rotateDown() {
-        if (mc.player != null) {
-            mc.player.setPitch(90); // look straight down
-        }
-    }
-
-    private void mineDown() {
+    private void mineBelow() {
         BlockPos below = mc.player.getBlockPos().down();
 
         if (mc.world.getBlockState(below).isAir()) return;
 
-        int pickSlot = findHotbarSlot(Items.NETHERITE_PICKAXE);
-        if (pickSlot == -1) pickSlot = findHotbarSlot(Items.DIAMOND_PICKAXE);
+        int pickSlot = -1;
+        for (net.minecraft.item.Item pick : pickaxePriority) {
+            pickSlot = findHotbarSlot(pick);
+            if (pickSlot != -1) break;
+        }
 
         if (pickSlot != -1) {
             mc.player.getInventory().selectedSlot = pickSlot;
-            mc.interactionManager.updateBlockBreakingProgress(below, mc.player.getHorizontalFacing());
+            mc.interactionManager.attackBlock(below, Direction.DOWN);
+            mc.interactionManager.updateBlockBreakingProgress(below, Direction.DOWN);
             mc.player.swingHand(Hand.MAIN_HAND);
         }
     }
