@@ -11,6 +11,8 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 
@@ -87,7 +89,7 @@ public class RTPBaseFinder extends Module {
     );
 
     public RTPBaseFinder() {
-        super(com.nnpg.glazed.GlazedAddon.CATEGORY, "rtp-base-finder", "Uses /rtp and digs down to detect bases.");
+        super(com.nnpg.glazed.GlazedAddon.CATEGORY, "rtp-base-finder", "Uses /rtp and digs to detect bases.");
     }
 
     @Override
@@ -145,7 +147,7 @@ public class RTPBaseFinder extends Module {
         }
 
         if (digging) {
-            mineBelow();
+            mineLookingAt();
             detectBase();
 
             int y = mc.player.getBlockY();
@@ -155,22 +157,31 @@ public class RTPBaseFinder extends Module {
         }
     }
 
-    private void mineBelow() {
-        BlockPos below = mc.player.getBlockPos().down();
-
-        if (mc.world.getBlockState(below).isAir()) {
+    private void mineLookingAt() {
+        // Raycast up to 5 blocks
+        HitResult result = mc.player.raycast(5.0, 0.0f, false);
+        if (!(result instanceof BlockHitResult bhr)) {
             miningBlock = null;
             breakProgress = 0f;
             return;
         }
 
-        // Creative mode → instant mine
+        BlockPos targetPos = bhr.getBlockPos();
+        Direction face = bhr.getSide();
+
+        if (mc.world.getBlockState(targetPos).isAir()) {
+            miningBlock = null;
+            breakProgress = 0f;
+            return;
+        }
+
+        // Creative → instant mine
         if (mc.player.getAbilities().creativeMode) {
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
+                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
             ));
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, below, Direction.DOWN
+                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, targetPos, face
             ));
             mc.player.swingHand(Hand.MAIN_HAND);
             miningBlock = null;
@@ -178,13 +189,13 @@ public class RTPBaseFinder extends Module {
             return;
         }
 
-        // Survival mode mining (vanilla-like)
-        if (miningBlock == null || !miningBlock.equals(below)) {
-            miningBlock = below;
+        // Survival mining
+        if (miningBlock == null || !miningBlock.equals(targetPos)) {
+            miningBlock = targetPos;
             breakProgress = 0f;
 
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
+                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
             ));
         }
 
@@ -196,7 +207,7 @@ public class RTPBaseFinder extends Module {
         }
         if (pickSlot != -1) mc.player.getInventory().selectedSlot = pickSlot;
 
-        float delta = mc.world.getBlockState(below).calcBlockBreakingDelta(mc.player, mc.world, below);
+        float delta = mc.world.getBlockState(targetPos).calcBlockBreakingDelta(mc.player, mc.world, targetPos);
         if (delta <= 0) return;
 
         breakProgress += delta;
@@ -204,12 +215,12 @@ public class RTPBaseFinder extends Module {
         mc.player.swingHand(Hand.MAIN_HAND);
 
         mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-            PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, below, Direction.DOWN
+            PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
         ));
 
         if (breakProgress >= 1f) {
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, below, Direction.DOWN
+                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, targetPos, face
             ));
             miningBlock = null;
             breakProgress = 0f;
