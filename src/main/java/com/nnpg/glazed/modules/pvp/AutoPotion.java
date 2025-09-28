@@ -8,7 +8,6 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.*;
 import net.minecraft.potion.Potion;
-import net.minecraft.potion.PotionUtil;
 import net.minecraft.util.Hand;
 
 import java.util.List;
@@ -91,7 +90,7 @@ public class AutoPotion extends Module {
 
         if (rotate.get() && originalPitch == null) {
             originalPitch = mc.player.getPitch();
-            mc.player.setPitch(90f);
+            mc.player.setPitch(90f); // look down
         }
 
         mc.player.getInventory().selectedSlot = potionSlot;
@@ -132,7 +131,7 @@ public class AutoPotion extends Module {
             ItemStack stack = mc.player.getInventory().getStack(i);
             Item item = stack.getItem();
             if (item instanceof SplashPotionItem || item instanceof LingeringPotionItem) {
-                Potion potionType = PotionUtil.getPotion(stack);
+                Potion potionType = ((PotionItem) item).getPotion(stack); // Fixed: get directly from PotionItem
                 if (potions.get().contains(potionType)) return i;
             }
         }
@@ -144,7 +143,7 @@ public class AutoPotion extends Module {
             ItemStack stack = mc.player.getInventory().getStack(i);
             Item item = stack.getItem();
             if (item instanceof PotionItem && !(item instanceof SplashPotionItem) && !(item instanceof LingeringPotionItem)) {
-                Potion potionType = PotionUtil.getPotion(stack);
+                Potion potionType = ((PotionItem) item).getPotion(stack); // Fixed here as well
                 if (potions.get().contains(potionType)) return i;
             }
         }
