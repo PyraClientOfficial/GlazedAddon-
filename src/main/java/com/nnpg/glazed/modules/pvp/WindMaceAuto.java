@@ -4,6 +4,7 @@ import com.nnpg.glazed.GlazedAddon;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.*;
@@ -32,38 +33,38 @@ public class WindMaceAuto extends Module {
         .build()
     );
 
-    private boolean triggered = false;   // only true when keybind is pressed
+    private final Setting<Keybind> triggerKey = sgGeneral.add(new KeybindSetting.Builder()
+        .name("trigger-key")
+        .description("Keybind to activate the wind+mace combo.")
+        .defaultValue(Keybind.none())
+        .build()
+    );
+
+    private boolean triggered = false;   // true only when key pressed
     private boolean usedWindCharge = false;
     private int cooldown = 0;
     private int oldSlot = -1;
     private Float originalPitch = null;
 
     public WindMaceAuto() {
-        super(GlazedAddon.pvp, "wind-mace-auto", "Uses Wind Charge, then Mace when falling. Must be triggered manually with a keybind.");
+        super(GlazedAddon.pvp, "wind-mace-auto", "Uses Wind Charge, then Mace when falling. Triggered by a keybind.");
     }
 
     @Override
     public void onActivate() {
-        // We override default toggle behavior.
-        // Module stays enabled, but logic only runs when `triggered` is set.
-        triggered = false;
-        usedWindCharge = false;
-        cooldown = 0;
-        oldSlot = -1;
-        originalPitch = null;
-    }
-
-    // Keybind action – assign this in the Meteor GUI
-    @Override
-    public void onKeybind(boolean pressed) {
-        if (pressed && !triggered) {
-            triggered = true;
-        }
+        reset();
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
-        if (!triggered || mc.player == null || mc.world == null) return;
+        if (mc.player == null || mc.world == null) return;
+
+        // check if trigger key is pressed
+        if (triggerKey.get().isPressed() && !triggered) {
+            triggered = true;
+        }
+
+        if (!triggered) return;
 
         PlayerEntity target = getNearestPlayer(range.get());
         if (target == null) return;
@@ -75,7 +76,7 @@ public class WindMaceAuto extends Module {
             return;
         }
 
-        // Step 1: Use Wind Charge on trigger
+        // Step 1: Use Wind Charge
         if (!usedWindCharge) {
             int windSlot = findItemInHotbar("Wind Charge");
             if (windSlot != -1) {
@@ -91,7 +92,7 @@ public class WindMaceAuto extends Module {
             }
         }
 
-        // Step 2: While descending, attack with Mace
+        // Step 2: While falling, hit with Mace
         if (usedWindCharge && mc.player.getVelocity().y < 0) {
             int maceSlot = findMaceInHotbar();
             if (maceSlot != -1) {
@@ -102,7 +103,7 @@ public class WindMaceAuto extends Module {
             }
         }
 
-        // Step 3: Reset when landing
+        // Step 3: Reset after landing
         if (mc.player.isOnGround()) {
             reset();
         }
@@ -111,9 +112,10 @@ public class WindMaceAuto extends Module {
     private void reset() {
         if (oldSlot != -1) mc.player.getInventory().selectedSlot = oldSlot;
         oldSlot = -1;
-        triggered = false; // must be triggered again manually
+        triggered = false;
         usedWindCharge = false;
         originalPitch = null;
+        cooldown = 0;
     }
 
     private PlayerEntity getNearestPlayer(double maxRange) {
