@@ -16,45 +16,33 @@ public class WindMaceAuto extends Module {
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
         .name("range")
-        .description("Maximum distance to a target player to attempt the attack.")
+        .description("Maximum distance to a target player to attack.")
         .defaultValue(5.0)
-        .min(1.0)
-        .max(20.0)
+        .min(1.0).max(20.0)
         .sliderMax(20.0)
         .build()
     );
 
     private final Setting<Keybind> triggerKey = sgGeneral.add(new KeybindSetting.Builder()
         .name("trigger-key")
-        .description("Press this key to perform one Wind Charge -> Mace sequence.")
+        .description("Press once to use Wind Charge and begin the mace drop sequence.")
         .defaultValue(Keybind.none())
         .build()
     );
 
-    private final Setting<Integer> attackCooldownTicks = sgGeneral.add(new IntSetting.Builder()
-        .name("attack-cooldown-ticks")
-        .description("Minimum ticks between mace swings while falling (prevents micro-spam).")
-        .defaultValue(3)
-        .min(0)
-        .max(20)
-        .build()
-    );
-
     // state
-    private boolean active = false;            // sequence in progress for this keypress
-    private boolean usedWindCharge = false;    // wind charge was used this sequence
+    private boolean active = false;        // sequence running
+    private boolean usedWindCharge = false;
     private int oldSlot = -1;
     private float savedPitch = Float.NaN;
-    private int attackTickTimer = 0;           // cooldown between swings
-    private boolean prevKeyPressed = false;    // detect rising edge
+    private boolean prevKeyPressed = false;
 
     public WindMaceAuto() {
-        super(GlazedAddon.pvp, "wind-mace-auto", "Use Wind Charge then repeatedly hit with a mace while falling (one press = one sequence).");
+        super(GlazedAddon.pvp, "wind-mace-auto", "Use Wind Charge and hit with mace while falling down.");
     }
 
     @Override
     public void onDeactivate() {
-        // restore slot/pitch if disabling mid-sequence
         restoreState();
     }
 
@@ -62,86 +50,50 @@ public class WindMaceAuto extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
 
-        // rising-edge key detection (one activation per press)
+        // detect key press
         boolean keyPressed = triggerKey.get().isPressed();
         if (keyPressed && !prevKeyPressed && !active) {
-            // start a sequence only if on ground (prevents mid-air accidental triggers)
-            if (mc.player.isOnGround()) {
-                startSequence();
-            } else {
-                info("WindMaceAuto: You are mid-air — must be on ground to trigger.");
-            }
+            if (mc.player.isOnGround()) startSequence();
         }
         prevKeyPressed = keyPressed;
 
-        if (!active) return; // nothing to do until a sequence is active
+        if (!active) return;
 
-        // Find a nearby target — we only proceed when there's a player in range
-        PlayerEntity target = getNearestPlayer(range.get());
-        if (target == null) {
-            // If no target, we still allow the sequence to continue (you might want that).
-            // Optionally you can cancel the sequence here.
-        }
-
-        // If we haven't used wind charge yet, use it once (then wait for motion)
+        // if not used wind charge yet, use it once
         if (!usedWindCharge) {
-            int windSlot = findItemInHotbarByName("wind");
+            int windSlot = findItemInHotbar("wind");
             if (windSlot == -1) {
-                info("WindMaceAuto: No Wind Charge found in hotbar — cancelling sequence.");
+                info("No Wind Charge found.");
                 restoreState();
                 return;
             }
-
-            // store old slot & pitch
-            if (oldSlot == -1) oldSlot = mc.player.getInventory().selectedSlot;
-            if (Float.isNaN(savedPitch)) savedPitch = mc.player.getPitch();
-
-            // switch to wind charge and use it
+            oldSlot = mc.player.getInventory().selectedSlot;
+            savedPitch = mc.player.getPitch();
             mc.player.getInventory().selectedSlot = windSlot;
-            mc.player.setPitch(90f); // look down for consistent usage
+            mc.player.setPitch(90f); // look down
             mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-
             usedWindCharge = true;
-            attackTickTimer = 0;
             return;
         }
 
-        // Once wind charge used, wait until we're descending (velocity.y < 0) to begin mace swings
+        // wait until falling (descending)
         if (mc.player.getVelocity().y < -0.03) {
-            // While descending, attempt to hit if target exists and in range
-            if (target != null) {
-                double distSq = mc.player.squaredDistanceTo(target);
-                if (distSq <= range.get() * range.get()) {
-                    int maceSlot = findMaceInHotbar();
-                    if (maceSlot == -1) {
-                        // no mace found — just continue until landing and restore
-                        // optionally, you might want to try fists/other weapons
-                    } else {
-                        // attack cooldown between swings (simple tick timer)
-                        if (attackTickTimer <= 0) {
-                            mc.player.getInventory().selectedSlot = maceSlot;
-
-                            // face the target quickly (small, immediate rotation)
-                            lookAtEntity(target);
-
-                            // perform the attack
-                            mc.interactionManager.attackEntity(mc.player, target);
-                            mc.player.swingHand(Hand.MAIN_HAND);
-
-                            // reset small cooldown so we don't spam every client tick
-                            attackTickTimer = Math.max(0, attackCooldownTicks.get());
-                        } else {
-                            attackTickTimer--;
-                        }
+            PlayerEntity target = getNearestPlayer(range.get());
+            if (target != null && mc.interactionManager.getCurrentGameMode().isSurvivalLike()) {
+                if (mc.player.getAttackCooldownProgress(0) >= 1.0f) {
+                    int maceSlot = findItemInHotbar("mace");
+                    if (maceSlot != -1) {
+                        mc.player.getInventory().selectedSlot = maceSlot;
+                        lookAtEntity(target);
+                        mc.interactionManager.attackEntity(mc.player, target);
+                        mc.player.swingHand(Hand.MAIN_HAND);
                     }
                 }
             }
         }
 
-        // When we hit the ground, finish the sequence and restore original slot & pitch
-        if (mc.player.isOnGround()) {
-            restoreState();
-        }
+        // when we land, end sequence
+        if (mc.player.isOnGround()) restoreState();
     }
 
     private void startSequence() {
@@ -149,9 +101,7 @@ public class WindMaceAuto extends Module {
         usedWindCharge = false;
         oldSlot = -1;
         savedPitch = Float.NaN;
-        attackTickTimer = 0;
-        prevKeyPressed = true; // avoid immediate retrigger while holding
-        info("WindMaceAuto: Sequence started — using Wind Charge.");
+        info("WindMaceAuto: sequence started.");
     }
 
     private void restoreState() {
@@ -162,9 +112,8 @@ public class WindMaceAuto extends Module {
         usedWindCharge = false;
         oldSlot = -1;
         savedPitch = Float.NaN;
-        attackTickTimer = 0;
         prevKeyPressed = false;
-        info("WindMaceAuto: Sequence ended.");
+        info("WindMaceAuto: sequence ended.");
     }
 
     private PlayerEntity getNearestPlayer(double maxRange) {
@@ -181,9 +130,8 @@ public class WindMaceAuto extends Module {
         return nearest;
     }
 
-    private int findItemInHotbarByName(String nameSubstr) {
-        if (mc.player == null) return -1;
-        String needle = nameSubstr.toLowerCase();
+    private int findItemInHotbar(String keyword) {
+        String needle = keyword.toLowerCase();
         for (int i = 0; i < 9; i++) {
             ItemStack s = mc.player.getInventory().getStack(i);
             if (s != null && !s.isEmpty()) {
@@ -194,13 +142,7 @@ public class WindMaceAuto extends Module {
         return -1;
     }
 
-    private int findMaceInHotbar() {
-        // look for any hotbar item with "mace" in its display name
-        return findItemInHotbarByName("mace");
-    }
-
     private void lookAtEntity(PlayerEntity e) {
-        // immediate yaw+pitch snap to face entity (helps ensure client-side hit)
         Vec3d eyes = mc.player.getEyePos();
         Vec3d targetEyes = e.getEyePos();
         double dx = targetEyes.x - eyes.x;
