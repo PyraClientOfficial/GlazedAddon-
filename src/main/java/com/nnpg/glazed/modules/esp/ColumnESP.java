@@ -12,8 +12,6 @@ import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Vec3d;
@@ -94,7 +92,9 @@ public class ColumnESP extends Module {
         .build()
     );
 
-    private final Set<BlockPos> detectedColumns = Collections.synchronizedSet(new HashSet<>());
+    private record Column(BlockPos start, int length) {}
+
+    private final Set<Column> detectedColumns = Collections.synchronizedSet(new HashSet<>());
 
     public ColumnESP() {
         super(GlazedAddon.esp, "ColumnESP", "Detects and highlights vertical block columns.");
@@ -125,7 +125,7 @@ public class ColumnESP extends Module {
         int yMin = Math.max(chunk.getBottomY(), minY.get());
         int yMax = Math.min(chunk.getBottomY() + chunk.getHeight(), maxY.get());
 
-        Set<BlockPos> newDetected = new HashSet<>();
+        Set<Column> newDetected = new HashSet<>();
 
         for (int x = xStart; x < xStart + 16; x++) {
             for (int z = zStart; z < zStart + 16; z++) {
@@ -141,7 +141,7 @@ public class ColumnESP extends Module {
                         length++;
                     } else {
                         if (length >= minColumnLength.get() && columnStart != null) {
-                            newDetected.add(columnStart);
+                            newDetected.add(new Column(columnStart, length));
                         }
                         length = 0;
                         columnStart = null;
@@ -149,14 +149,14 @@ public class ColumnESP extends Module {
                 }
 
                 if (length >= minColumnLength.get() && columnStart != null) {
-                    newDetected.add(columnStart);
+                    newDetected.add(new Column(columnStart, length));
                 }
             }
         }
 
-        detectedColumns.removeIf(pos -> {
-            ChunkPos blockChunk = new ChunkPos(pos);
-            return blockChunk.equals(cpos) && !newDetected.contains(pos);
+        detectedColumns.removeIf(col -> {
+            ChunkPos blockChunk = new ChunkPos(col.start());
+            return blockChunk.equals(cpos) && !newDetected.contains(col);
         });
 
         detectedColumns.addAll(newDetected);
@@ -172,11 +172,21 @@ public class ColumnESP extends Module {
         Color tracerColorValue = new Color(tracerColor.get());
 
         synchronized (detectedColumns) {
-            for (BlockPos pos : detectedColumns) {
-                event.renderer.box(pos, sideColor, lineColor, shapeMode.get(), 0);
+            for (Column col : detectedColumns) {
+                BlockPos start = col.start();
+                int length = col.length();
 
+                // Draw a tall ESP box for the full column
+                event.renderer.box(
+                    start.getX(), start.getY(), start.getZ(),
+                    start.getX() + 1, start.getY() + length, start.getZ() + 1,
+                    sideColor, lineColor, shapeMode.get(), 0
+                );
+
+                // Draw one tracer to the middle of the column
                 if (showTracers.get()) {
-                    Vec3d blockCenter = Vec3d.ofCenter(pos);
+                    double midY = start.getY() + (length / 2.0);
+                    Vec3d columnCenter = new Vec3d(start.getX() + 0.5, midY, start.getZ() + 0.5);
 
                     Vec3d startPos;
                     if (mc.options.getPerspective().isFirstPerson()) {
@@ -194,8 +204,11 @@ public class ColumnESP extends Module {
                         );
                     }
 
-                    event.renderer.line(startPos.x, startPos.y, startPos.z,
-                        blockCenter.x, blockCenter.y, blockCenter.z, tracerColorValue);
+                    event.renderer.line(
+                        startPos.x, startPos.y, startPos.z,
+                        columnCenter.x, columnCenter.y, columnCenter.z,
+                        tracerColorValue
+                    );
                 }
             }
         }
