@@ -68,11 +68,11 @@ public class RTPBaseFinder extends Module {
     private boolean digging = false;
     private boolean clutching = false;
     private boolean rotating = false;
+    private boolean waitingForRtp = false; // prevents rtp spam
 
     private float targetPitch = 90f;
 
     private BlockPos miningBlock = null;
-    private float breakProgress = 0f;
 
     private final Set<Block> storages = Set.of(
         Blocks.CHEST, Blocks.TRAPPED_CHEST, Blocks.BARREL, Blocks.SHULKER_BOX
@@ -104,7 +104,7 @@ public class RTPBaseFinder extends Module {
             clutching = false;
             rotating = true;
             miningBlock = null;
-            breakProgress = 0f;
+            waitingForRtp = true; // prevent spam until rotation completes
         }
     }
 
@@ -121,6 +121,7 @@ public class RTPBaseFinder extends Module {
                 mc.player.setPitch(targetPitch);
                 rotating = false;
                 digging = true;
+                waitingForRtp = false; // ready for next cycle
             } else {
                 float newPitch = currentPitch + Math.signum(targetPitch - currentPitch) * step;
                 mc.player.setPitch(newPitch);
@@ -154,37 +155,31 @@ public class RTPBaseFinder extends Module {
             detectBase();
 
             int y = mc.player.getBlockY();
-            if (y <= yMin.get()) {
-                sendRtp();
+            if (y <= yMin.get() && !waitingForRtp) {
+                sendRtp(); // only once
             }
         }
     }
 
     /**
-     * Mine the block the player is currently looking at (up to 5 blocks).
-     * Uses interactionManager.attackBlock(...) once when a new target is acquired
-     * and then calls updateBlockBreakingProgress(...) every tick so vanilla progress occurs.
+     * Mine the block the player is currently looking at (like vanilla survival).
      */
     private void mineLookingAt() {
-        // Raycast a short distance in the look direction (player is expected to be looking down)
         HitResult result = mc.player.raycast(5.0, 0.0f, false);
         if (!(result instanceof BlockHitResult bhr)) {
             miningBlock = null;
-            breakProgress = 0f;
             return;
         }
 
         BlockPos targetPos = bhr.getBlockPos();
         Direction face = bhr.getSide();
 
-        // Nothing to mine
         if (mc.world.getBlockState(targetPos).isAir()) {
             miningBlock = null;
-            breakProgress = 0f;
             return;
         }
 
-        // Equip best available pickaxe (if any)
+        // Equip best available pickaxe
         int pickSlot = -1;
         for (net.minecraft.item.Item pick : pickaxePriority) {
             int s = findHotbarSlot(pick);
@@ -195,33 +190,19 @@ public class RTPBaseFinder extends Module {
         }
         if (pickSlot != -1) mc.player.getInventory().selectedSlot = pickSlot;
 
-        // Creative: break instantly using interaction manager (client side will reflect instantly)
-        if (mc.player.getAbilities().creativeMode) {
-            // attackBlock in creative should instantly break on client
-            mc.interactionManager.attackBlock(targetPos, face);
-            mc.player.swingHand(Hand.MAIN_HAND);
-            miningBlock = null;
-            breakProgress = 0f;
-            return;
-        }
-
-        // If this is a new target, start the breaking action
+        // New block → start mining
         if (miningBlock == null || !miningBlock.equals(targetPos)) {
             miningBlock = targetPos;
-            breakProgress = 0f;
-
-            // Begin breaking (sends start packet internally via interactionManager)
-            mc.interactionManager.attackBlock(targetPos, face);
+            mc.interactionManager.attackBlock(targetPos, face); // start break
         }
 
-        // Update block breaking progress (vanilla client-side progression & packets)
+        // Continue mining progress
         mc.interactionManager.updateBlockBreakingProgress(targetPos, face);
         mc.player.swingHand(Hand.MAIN_HAND);
 
-        // If the block became air (broken), reset state
+        // Reset when block breaks
         if (mc.world.getBlockState(targetPos).isAir()) {
             miningBlock = null;
-            breakProgress = 0f;
         }
     }
 
@@ -235,7 +216,6 @@ public class RTPBaseFinder extends Module {
         }
 
         if (found >= baseDetectionAmount.get()) {
-            // Disconnect with a literal message
             mc.player.networkHandler.getConnection().disconnect(Text.literal("[RtpBaseFinder] Base Found"));
         }
     }
