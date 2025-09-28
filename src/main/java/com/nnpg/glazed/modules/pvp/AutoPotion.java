@@ -7,7 +7,6 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.*;
-import net.minecraft.potion.Potion;
 import net.minecraft.util.Hand;
 
 import java.util.List;
@@ -50,10 +49,11 @@ public class AutoPotion extends Module {
             .build()
     );
 
-    private final Setting<List<Potion>> potions = sgPotions.add(new EnumListSetting.Builder<Potion>()
+    // Use ListSetting<Item> to select which potion items to use
+    private final Setting<List<Item>> potions = sgPotions.add(new ListSetting.Builder<Item>()
             .name("potions")
             .description("Which potions to throw or drink")
-            .defaultValue(List.of()) // empty by default
+            .defaultValue(List.of(Items.POTION, Items.SPLASH_POTION, Items.LINGERING_POTION))
             .build()
     );
 
@@ -126,21 +126,11 @@ public class AutoPotion extends Module {
         return nearest;
     }
 
-    // Helper method to get Potion from a stack
-    private Potion getPotionFromStack(ItemStack stack) {
-        if (stack.getItem() instanceof PotionItem potionItem) {
-            return potionItem.getDefaultPotion();
-        }
-        return null;
-    }
-
     private int findPotionSlot() {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
-            Item item = stack.getItem();
-            if (item instanceof SplashPotionItem || item instanceof LingeringPotionItem) {
-                Potion potionType = getPotionFromStack(stack);
-                if (potionType != null && potions.get().contains(potionType)) return i;
+            if (potions.get().contains(stack.getItem()) && (stack.getItem() instanceof SplashPotionItem || stack.getItem() instanceof LingeringPotionItem)) {
+                return i;
             }
         }
         return -1;
@@ -149,10 +139,8 @@ public class AutoPotion extends Module {
     private int findDrinkablePotionSlot() {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
-            Item item = stack.getItem();
-            if (item instanceof PotionItem && !(item instanceof SplashPotionItem) && !(item instanceof LingeringPotionItem)) {
-                Potion potionType = getPotionFromStack(stack);
-                if (potionType != null && potions.get().contains(potionType)) return i;
+            if (potions.get().contains(stack.getItem()) && stack.getItem() instanceof PotionItem && !(stack.getItem() instanceof SplashPotionItem) && !(stack.getItem() instanceof LingeringPotionItem)) {
+                return i;
             }
         }
         return -1;
