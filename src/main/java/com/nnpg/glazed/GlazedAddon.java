@@ -42,6 +42,7 @@ public class GlazedAddon extends MeteorAddon {
         Modules.get().add(new SpawnerDropper()); //done
         Modules.get().add(new AutoShulkerOrder()); // done
         Modules.get().add(new LegitCrystalMacro());
+        Modules.get().add(new WindMaceModule());
         Modules.get().add(new OneByOneHoles());
         Modules.get().add(new KelpESP());
         Modules.get().add(new ColumnESP());
