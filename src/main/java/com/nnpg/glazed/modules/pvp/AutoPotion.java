@@ -9,11 +9,8 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.*;
 import net.minecraft.util.Hand;
 
-import java.util.List;
-
 public class AutoPotion extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgPotions = settings.createGroup("Potions");
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
             .name("range")
@@ -25,15 +22,8 @@ public class AutoPotion extends Module {
             .build()
     );
 
-    private final Setting<Boolean> switchToSword = sgGeneral.add(new BoolSetting.Builder()
-            .name("Switch To Sword After")
-            .description("Switches to the closest sword in hotbar after throwing or drinking a potion.")
-            .defaultValue(true)
-            .build()
-    );
-
     private final Setting<Integer> cooldownTicks = sgGeneral.add(new IntSetting.Builder()
-            .name("Potion Cooldown")
+            .name("potion-cooldown")
             .description("Cooldown in ticks between potion uses.")
             .defaultValue(20)
             .min(1)
@@ -43,17 +33,16 @@ public class AutoPotion extends Module {
     );
 
     private final Setting<Boolean> rotate = sgGeneral.add(new BoolSetting.Builder()
-            .name("Rotate Down")
-            .description("Rotates player down when throwing a potion or drinking it, then back up.")
+            .name("rotate-down")
+            .description("Rotate down when throwing or drinking a potion.")
             .defaultValue(true)
             .build()
     );
 
-    // Use ListSetting<Item> to select which potion items to use
-    private final Setting<List<Item>> potions = sgPotions.add(new ListSetting.Builder<Item>()
-            .name("potions")
-            .description("Which potions to throw or drink")
-            .defaultValue(List.of(Items.POTION, Items.SPLASH_POTION, Items.LINGERING_POTION))
+    private final Setting<Boolean> switchToSword = sgGeneral.add(new BoolSetting.Builder()
+            .name("switch-to-sword")
+            .description("Switches to the closest sword after using a potion.")
+            .defaultValue(true)
             .build()
     );
 
@@ -61,7 +50,7 @@ public class AutoPotion extends Module {
     private Float originalPitch = null;
 
     public AutoPotion() {
-        super(GlazedAddon.pvp, "auto-potion", "Throws or drinks potions automatically near players.");
+        super(GlazedAddon.pvp, "auto-potion", "Automatically uses potions on nearby players.");
     }
 
     @EventHandler
@@ -78,32 +67,34 @@ public class AutoPotion extends Module {
 
         int oldSlot = mc.player.getInventory().selectedSlot;
 
-        int potionSlot = findPotionSlot();
-        boolean drinking = false;
+        int potionSlot = findPotionInHotbar();
+        boolean drinking = potionSlot != -1 && mc.player.getInventory().getStack(potionSlot).getItem() instanceof PotionItem &&
+                           !(mc.player.getInventory().getStack(potionSlot).getItem() instanceof SplashPotionItem) &&
+                           !(mc.player.getInventory().getStack(potionSlot).getItem() instanceof LingeringPotionItem);
 
-        if (potionSlot == -1) {
-            potionSlot = findDrinkablePotionSlot();
-            drinking = potionSlot != -1;
-        }
+        if (potionSlot == -1) return; // no potion found
 
-        if (potionSlot == -1) return;
-
+        // Rotate down
         if (rotate.get() && originalPitch == null) {
             originalPitch = mc.player.getPitch();
-            mc.player.setPitch(90f); // look down
+            mc.player.setPitch(90f);
         }
 
+        // Switch to potion slot
         mc.player.getInventory().selectedSlot = potionSlot;
 
+        // Use potion
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
 
         cooldown = cooldownTicks.get();
 
+        // Rotate back
         if (rotate.get() && originalPitch != null) {
             mc.player.setPitch(originalPitch);
             originalPitch = null;
         }
 
+        // Switch to closest sword
         if (switchToSword.get()) {
             int swordSlot = findClosestSwordSlot();
             mc.player.getInventory().selectedSlot = swordSlot != -1 ? swordSlot : oldSlot;
@@ -115,6 +106,7 @@ public class AutoPotion extends Module {
     private PlayerEntity getNearestPlayer(double maxRange) {
         PlayerEntity nearest = null;
         double closest = maxRange * maxRange;
+
         for (PlayerEntity player : mc.world.getPlayers()) {
             if (player == mc.player || player.isDead() || player.isSpectator()) continue;
             double distSq = mc.player.squaredDistanceTo(player);
@@ -126,20 +118,10 @@ public class AutoPotion extends Module {
         return nearest;
     }
 
-    private int findPotionSlot() {
+    private int findPotionInHotbar() {
         for (int i = 0; i < 9; i++) {
-            ItemStack stack = mc.player.getInventory().getStack(i);
-            if (potions.get().contains(stack.getItem()) && (stack.getItem() instanceof SplashPotionItem || stack.getItem() instanceof LingeringPotionItem)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private int findDrinkablePotionSlot() {
-        for (int i = 0; i < 9; i++) {
-            ItemStack stack = mc.player.getInventory().getStack(i);
-            if (potions.get().contains(stack.getItem()) && stack.getItem() instanceof PotionItem && !(stack.getItem() instanceof SplashPotionItem) && !(stack.getItem() instanceof LingeringPotionItem)) {
+            Item item = mc.player.getInventory().getStack(i).getItem();
+            if (item instanceof SplashPotionItem || item instanceof LingeringPotionItem || item instanceof PotionItem) {
                 return i;
             }
         }
