@@ -16,7 +16,7 @@ public class WindMaceAuto extends Module {
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
         .name("range")
-        .description("Maximum distance to a target player to attack.")
+        .description("Maximum distance to target player.")
         .defaultValue(5.0)
         .min(1.0).max(20.0)
         .sliderMax(20.0)
@@ -25,14 +25,14 @@ public class WindMaceAuto extends Module {
 
     private final Setting<Keybind> triggerKey = sgGeneral.add(new KeybindSetting.Builder()
         .name("trigger-key")
-        .description("Press once to use Wind Charge and begin the mace drop sequence.")
+        .description("Press to Wind Charge and start the mace drop sequence.")
         .defaultValue(Keybind.none())
         .build()
     );
 
     private final Setting<Integer> endCooldown = sgGeneral.add(new IntSetting.Builder()
         .name("end-cooldown")
-        .description("Ticks to wait after hitting the ground before restoring state.")
+        .description("Ticks to wait after hitting the ground before resetting.")
         .defaultValue(20) // 1 second
         .min(0).max(100)
         .sliderMax(100)
@@ -42,13 +42,14 @@ public class WindMaceAuto extends Module {
     // state
     private boolean active = false;
     private boolean usedWindCharge = false;
+    private int maceSwitchDelay = 0;
     private int oldSlot = -1;
     private float savedPitch = Float.NaN;
     private boolean prevKeyPressed = false;
     private int groundTicks = 0;
 
     public WindMaceAuto() {
-        super(GlazedAddon.pvp, "wind-mace-auto", "Use Wind Charge and hit with mace while falling down.");
+        super(GlazedAddon.pvp, "wind-mace-auto", "Use Wind Charge and hit with mace while falling.");
     }
 
     @Override
@@ -83,11 +84,18 @@ public class WindMaceAuto extends Module {
             mc.player.setPitch(90f);
             mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
             usedWindCharge = true;
+            maceSwitchDelay = 10; // 0.5s delay before switching to mace
             info("Wind Charge used.");
             return;
         }
 
-        // Step 2: attack only while falling
+        // Step 2: after 0.5s, switch to mace
+        if (maceSwitchDelay > 0) {
+            maceSwitchDelay--;
+            return;
+        }
+
+        // Step 3: attack only while falling
         if (mc.player.getVelocity().y < -0.05) {
             PlayerEntity target = getNearestPlayer(range.get());
             if (target != null) {
@@ -106,7 +114,7 @@ public class WindMaceAuto extends Module {
             }
         }
 
-        // Step 3: reset after cooldown when on ground
+        // Step 4: reset after cooldown when on ground
         if (mc.player.isOnGround()) {
             groundTicks++;
             if (groundTicks >= endCooldown.get()) {
@@ -120,6 +128,7 @@ public class WindMaceAuto extends Module {
     private void startSequence() {
         active = true;
         usedWindCharge = false;
+        maceSwitchDelay = 0;
         oldSlot = -1;
         savedPitch = Float.NaN;
         groundTicks = 0;
@@ -133,6 +142,7 @@ public class WindMaceAuto extends Module {
         if (!Float.isNaN(savedPitch)) mc.player.setPitch(savedPitch);
         active = false;
         usedWindCharge = false;
+        maceSwitchDelay = 0;
         oldSlot = -1;
         savedPitch = Float.NaN;
         prevKeyPressed = false;
