@@ -8,7 +8,6 @@ import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.item.Items;
 import net.minecraft.item.ItemStack;
-import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
 import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
@@ -113,6 +112,7 @@ public class RTPBaseFinder extends Module {
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null) return;
 
+        // Smooth rotation to look down before digging
         if (rotating) {
             float currentPitch = mc.player.getPitch();
             float step = rotationSpeed.get().floatValue();
@@ -127,11 +127,13 @@ public class RTPBaseFinder extends Module {
             }
         }
 
+        // Falling check → try MLG
         if (mc.player.fallDistance > 3 && mc.player.getVelocity().y < -0.5 && !clutching) {
             if (tryMLG()) clutching = true;
             return;
         }
 
+        // After MLG, pick up water
         if (clutching) {
             BlockPos feet = mc.player.getBlockPos();
             if (mc.world.getBlockState(feet).getBlock() == Blocks.WATER) {
@@ -146,6 +148,7 @@ public class RTPBaseFinder extends Module {
             return;
         }
 
+        // Normal digging
         if (digging) {
             mineLookingAt();
             detectBase();
@@ -157,11 +160,15 @@ public class RTPBaseFinder extends Module {
         }
     }
 
+    /**
+     * Mine the block the player is currently looking at (up to 5 blocks).
+     * Uses interactionManager.attackBlock(...) once when a new target is acquired
+     * and then calls updateBlockBreakingProgress(...) every tick so vanilla progress occurs.
+     */
     private void mineLookingAt() {
-        // Raycast up to 5 blocks
+        // Raycast a short distance in the look direction (player is expected to be looking down)
         HitResult result = mc.player.raycast(5.0, 0.0f, false);
         if (!(result instanceof BlockHitResult bhr)) {
-            // nothing targeted
             miningBlock = null;
             breakProgress = 0f;
             return;
@@ -170,13 +177,14 @@ public class RTPBaseFinder extends Module {
         BlockPos targetPos = bhr.getBlockPos();
         Direction face = bhr.getSide();
 
+        // Nothing to mine
         if (mc.world.getBlockState(targetPos).isAir()) {
             miningBlock = null;
             breakProgress = 0f;
             return;
         }
 
-        // Pick best pickaxe (if any) and set hotbar selection
+        // Equip best available pickaxe (if any)
         int pickSlot = -1;
         for (net.minecraft.item.Item pick : pickaxePriority) {
             int s = findHotbarSlot(pick);
@@ -187,43 +195,31 @@ public class RTPBaseFinder extends Module {
         }
         if (pickSlot != -1) mc.player.getInventory().selectedSlot = pickSlot;
 
-        // Creative → instant mine
+        // Creative: break instantly using interaction manager (client side will reflect instantly)
         if (mc.player.getAbilities().creativeMode) {
-            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
-            ));
-            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, targetPos, face
-            ));
+            // attackBlock in creative should instantly break on client
+            mc.interactionManager.attackBlock(targetPos, face);
             mc.player.swingHand(Hand.MAIN_HAND);
             miningBlock = null;
             breakProgress = 0f;
             return;
         }
 
-        // Survival mining: start once when target changes
+        // If this is a new target, start the breaking action
         if (miningBlock == null || !miningBlock.equals(targetPos)) {
             miningBlock = targetPos;
             breakProgress = 0f;
-            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
-            ));
+
+            // Begin breaking (sends start packet internally via interactionManager)
+            mc.interactionManager.attackBlock(targetPos, face);
         }
 
-        // Calculate progress using vanilla method
-        float delta = mc.world.getBlockState(targetPos).calcBlockBreakingDelta(mc.player, mc.world, targetPos);
-        if (delta <= 0f) return;
-
-        breakProgress += delta;
-
-        // swing animation
+        // Update block breaking progress (vanilla client-side progression & packets)
+        mc.interactionManager.updateBlockBreakingProgress(targetPos, face);
         mc.player.swingHand(Hand.MAIN_HAND);
 
-        // Only send STOP when we finish (don't spam START every tick)
-        if (breakProgress >= 1f) {
-            mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-                PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, targetPos, face
-            ));
+        // If the block became air (broken), reset state
+        if (mc.world.getBlockState(targetPos).isAir()) {
             miningBlock = null;
             breakProgress = 0f;
         }
@@ -239,6 +235,7 @@ public class RTPBaseFinder extends Module {
         }
 
         if (found >= baseDetectionAmount.get()) {
+            // Disconnect with a literal message
             mc.player.networkHandler.getConnection().disconnect(Text.literal("[RtpBaseFinder] Base Found"));
         }
     }
