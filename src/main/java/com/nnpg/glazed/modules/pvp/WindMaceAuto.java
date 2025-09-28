@@ -8,7 +8,6 @@ import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
-import net.minecraft.item.Item;
 import net.minecraft.util.Hand;
 
 public class WindMaceAuto extends Module {
@@ -37,7 +36,7 @@ public class WindMaceAuto extends Module {
     private Float originalPitch = null;
 
     public WindMaceAuto() {
-        super(GlazedAddon.pvp, "wind-mace-auto", "Boosts with Wind Charge and hits with Mace repeatedly while falling until you hit the ground.");
+        super(GlazedAddon.pvp, "wind-mace-auto", "Boosts with Wind Charge then repeatedly hits with a Mace until you land.");
     }
 
     @Override
@@ -49,7 +48,7 @@ public class WindMaceAuto extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
 
-        // Check for trigger key
+        // Step 1: Key pressed -> trigger combo
         if (triggerKey.get().isPressed() && !triggered) {
             triggered = true;
         }
@@ -61,14 +60,14 @@ public class WindMaceAuto extends Module {
 
         if (oldSlot == -1) oldSlot = mc.player.getInventory().selectedSlot;
 
-        // Step 1: Use Wind Charge once
+        // Step 2: Use Wind Charge once
         if (!usedWindCharge) {
             int windSlot = findItemInHotbar("Wind Charge");
             if (windSlot != -1) {
                 mc.player.getInventory().selectedSlot = windSlot;
                 if (originalPitch == null) {
                     originalPitch = mc.player.getPitch();
-                    mc.player.setPitch(90f); // force look down
+                    mc.player.setPitch(90f); // look straight down
                 }
                 mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                 usedWindCharge = true;
@@ -76,7 +75,7 @@ public class WindMaceAuto extends Module {
             }
         }
 
-        // Step 2: While falling, hit as much as possible
+        // Step 3: While falling -> attack with mace repeatedly
         if (usedWindCharge && mc.player.getVelocity().y < -0.05) {
             int maceSlot = findMaceInHotbar();
             if (maceSlot != -1 && mc.player.getAttackCooldownProgress(0) >= 1.0f) {
@@ -87,7 +86,7 @@ public class WindMaceAuto extends Module {
             }
         }
 
-        // Step 3: Reset once landed
+        // Step 4: Reset when touching ground
         if (mc.player.isOnGround()) {
             reset();
         }
