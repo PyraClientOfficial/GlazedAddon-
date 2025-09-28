@@ -50,7 +50,7 @@ public class AutoPotion extends Module {
             .build()
     );
 
-    private final Setting<List<Potion>> potions = sgPotions.add(new MultiEnumSetting.Builder<Potion>()
+    private final Setting<List<Potion>> potions = sgPotions.add(new EnumListSetting.Builder<Potion>()
             .name("potions")
             .description("Which potions to throw or drink")
             .defaultValue(List.of()) // empty by default
@@ -126,13 +126,21 @@ public class AutoPotion extends Module {
         return nearest;
     }
 
+    // Helper method to get Potion from a stack
+    private Potion getPotionFromStack(ItemStack stack) {
+        if (stack.getItem() instanceof PotionItem potionItem) {
+            return potionItem.getDefaultPotion();
+        }
+        return null;
+    }
+
     private int findPotionSlot() {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             Item item = stack.getItem();
             if (item instanceof SplashPotionItem || item instanceof LingeringPotionItem) {
-                Potion potionType = ((PotionItem) item).getPotion(stack); // Fixed: get directly from PotionItem
-                if (potions.get().contains(potionType)) return i;
+                Potion potionType = getPotionFromStack(stack);
+                if (potionType != null && potions.get().contains(potionType)) return i;
             }
         }
         return -1;
@@ -143,8 +151,8 @@ public class AutoPotion extends Module {
             ItemStack stack = mc.player.getInventory().getStack(i);
             Item item = stack.getItem();
             if (item instanceof PotionItem && !(item instanceof SplashPotionItem) && !(item instanceof LingeringPotionItem)) {
-                Potion potionType = ((PotionItem) item).getPotion(stack); // Fixed here as well
-                if (potions.get().contains(potionType)) return i;
+                Potion potionType = getPotionFromStack(stack);
+                if (potionType != null && potions.get().contains(potionType)) return i;
             }
         }
         return -1;
