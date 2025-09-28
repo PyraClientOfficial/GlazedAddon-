@@ -13,36 +13,57 @@ public class WindMaceAuto extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
-            .name("range")
-            .description("Maximum distance to hit a player.")
-            .defaultValue(5.0)
-            .min(1.0)
-            .max(20.0)
-            .sliderMax(20.0)
-            .build()
+        .name("range")
+        .description("Maximum distance to hit a player.")
+        .defaultValue(5.0)
+        .min(1.0)
+        .max(20.0)
+        .sliderMax(20.0)
+        .build()
     );
 
     private final Setting<Integer> cooldownTicks = sgGeneral.add(new IntSetting.Builder()
-            .name("cooldown-ticks")
-            .description("Cooldown between Wind Charge uses.")
-            .defaultValue(10)
-            .min(1)
-            .max(50)
-            .build()
+        .name("hit-cooldown")
+        .description("Cooldown between hits (ticks).")
+        .defaultValue(10)
+        .min(1)
+        .max(50)
+        .sliderMax(50)
+        .build()
     );
 
-    private int cooldown = 0;
+    private boolean triggered = false;   // only true when keybind is pressed
     private boolean usedWindCharge = false;
+    private int cooldown = 0;
     private int oldSlot = -1;
     private Float originalPitch = null;
 
     public WindMaceAuto() {
-        super(GlazedAddon.pvp, "wind-mace-auto", "Uses Wind Charge then hits with Mace repeatedly.");
+        super(GlazedAddon.pvp, "wind-mace-auto", "Uses Wind Charge, then Mace when falling. Must be triggered manually with a keybind.");
+    }
+
+    @Override
+    public void onActivate() {
+        // We override default toggle behavior.
+        // Module stays enabled, but logic only runs when `triggered` is set.
+        triggered = false;
+        usedWindCharge = false;
+        cooldown = 0;
+        oldSlot = -1;
+        originalPitch = null;
+    }
+
+    // Keybind action – assign this in the Meteor GUI
+    @Override
+    public void onKeybind(boolean pressed) {
+        if (pressed && !triggered) {
+            triggered = true;
+        }
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
-        if (mc.player == null || mc.world == null) return;
+        if (!triggered || mc.player == null || mc.world == null) return;
 
         PlayerEntity target = getNearestPlayer(range.get());
         if (target == null) return;
@@ -54,7 +75,7 @@ public class WindMaceAuto extends Module {
             return;
         }
 
-        // Step 1: Use Wind Charge if not used in current jump
+        // Step 1: Use Wind Charge on trigger
         if (!usedWindCharge) {
             int windSlot = findItemInHotbar("Wind Charge");
             if (windSlot != -1) {
@@ -70,8 +91,8 @@ public class WindMaceAuto extends Module {
             }
         }
 
-        // Step 2: Use Mace while airborne
-        if (usedWindCharge && mc.player.getVelocity().y <= 0) { // descending
+        // Step 2: While descending, attack with Mace
+        if (usedWindCharge && mc.player.getVelocity().y < 0) {
             int maceSlot = findMaceInHotbar();
             if (maceSlot != -1) {
                 mc.player.getInventory().selectedSlot = maceSlot;
@@ -81,12 +102,18 @@ public class WindMaceAuto extends Module {
             }
         }
 
-        // Step 3: Reset when player is on the ground
+        // Step 3: Reset when landing
         if (mc.player.isOnGround()) {
-            usedWindCharge = false;
-            mc.player.getInventory().selectedSlot = oldSlot;
-            originalPitch = null;
+            reset();
         }
+    }
+
+    private void reset() {
+        if (oldSlot != -1) mc.player.getInventory().selectedSlot = oldSlot;
+        oldSlot = -1;
+        triggered = false; // must be triggered again manually
+        usedWindCharge = false;
+        originalPitch = null;
     }
 
     private PlayerEntity getNearestPlayer(double maxRange) {
@@ -106,7 +133,7 @@ public class WindMaceAuto extends Module {
     private int findItemInHotbar(String itemName) {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
-            if (stack != null && stack.getItem().getName(stack).getString().equalsIgnoreCase(itemName)) return i;
+            if (!stack.isEmpty() && stack.getItem().getName(stack).getString().equalsIgnoreCase(itemName)) return i;
         }
         return -1;
     }
@@ -114,7 +141,7 @@ public class WindMaceAuto extends Module {
     private int findMaceInHotbar() {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
-            if (stack != null && stack.getItem().getName(stack).getString().toLowerCase().contains("mace")) return i;
+            if (!stack.isEmpty() && stack.getItem().getName(stack).getString().toLowerCase().contains("mace")) return i;
         }
         return -1;
     }
