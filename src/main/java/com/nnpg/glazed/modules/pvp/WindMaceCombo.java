@@ -9,7 +9,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.*;
 import net.minecraft.util.Hand;
 
-public class WindMaceCombo extends Module {
+public class WindMaceAuto extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
@@ -22,37 +22,22 @@ public class WindMaceCombo extends Module {
             .build()
     );
 
-    private final Setting<Integer> hitCooldown = sgGeneral.add(new IntSetting.Builder()
-            .name("hit-cooldown")
-            .description("Cooldown between hits in ticks.")
-            .defaultValue(5)
+    private final Setting<Integer> cooldownTicks = sgGeneral.add(new IntSetting.Builder()
+            .name("cooldown-ticks")
+            .description("Cooldown between Wind Charge uses.")
+            .defaultValue(10)
             .min(1)
-            .max(20)
-            .build()
-    );
-
-    private final Setting<Boolean> loopHits = sgGeneral.add(new BoolSetting.Builder()
-            .name("loop-hits")
-            .description("Keep performing combos repeatedly.")
-            .defaultValue(true)
-            .build()
-    );
-
-    private final Setting<Boolean> doubleHit = sgGeneral.add(new BoolSetting.Builder()
-            .name("double-hit-combo")
-            .description("Perform sword then mace hit while descending.")
-            .defaultValue(true)
+            .max(50)
             .build()
     );
 
     private int cooldown = 0;
     private boolean usedWindCharge = false;
-    private boolean swordHitDone = false;
     private int oldSlot = -1;
     private Float originalPitch = null;
 
-    public WindMaceCombo() {
-        super(GlazedAddon.pvp, "wind-mace-combo", "Boosts with Wind Charge and performs a sword+mace combo.");
+    public WindMaceAuto() {
+        super(GlazedAddon.pvp, "wind-mace-auto", "Uses Wind Charge then hits with Mace repeatedly.");
     }
 
     @EventHandler
@@ -69,14 +54,14 @@ public class WindMaceCombo extends Module {
             return;
         }
 
-        // Step 1: Use Wind Charge
+        // Step 1: Use Wind Charge if not used in current jump
         if (!usedWindCharge) {
             int windSlot = findItemInHotbar("Wind Charge");
             if (windSlot != -1) {
                 mc.player.getInventory().selectedSlot = windSlot;
                 if (originalPitch == null) {
                     originalPitch = mc.player.getPitch();
-                    mc.player.setPitch(90f);
+                    mc.player.setPitch(90f); // look down
                 }
                 mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                 usedWindCharge = true;
@@ -85,35 +70,23 @@ public class WindMaceCombo extends Module {
             }
         }
 
-        // Step 2: Sword + Mace combo
+        // Step 2: Use Mace while airborne
         if (usedWindCharge && mc.player.getVelocity().y <= 0) { // descending
-            if (!swordHitDone && doubleHit.get()) {
-                int swordSlot = findSwordInHotbar();
-                if (swordSlot != -1) mc.player.getInventory().selectedSlot = swordSlot;
+            int maceSlot = findMaceInHotbar();
+            if (maceSlot != -1) {
+                mc.player.getInventory().selectedSlot = maceSlot;
                 lookAtPlayer(target);
                 mc.interactionManager.attackEntity(mc.player, target);
-                swordHitDone = true;
-                cooldown = hitCooldown.get();
-                return;
+                cooldown = cooldownTicks.get();
             }
-
-            int maceSlot = findMaceInHotbar();
-            if (maceSlot != -1) mc.player.getInventory().selectedSlot = maceSlot;
-            lookAtPlayer(target);
-            mc.interactionManager.attackEntity(mc.player, target);
-            cooldown = hitCooldown.get();
-
-            if (!loopHits.get()) resetModule();
-            else if (doubleHit.get()) swordHitDone = false; // prepare for next combo
         }
-    }
 
-    private void resetModule() {
-        mc.player.getInventory().selectedSlot = oldSlot;
-        oldSlot = -1;
-        usedWindCharge = false;
-        swordHitDone = false;
-        originalPitch = null;
+        // Step 3: Reset when player is on the ground
+        if (mc.player.isOnGround()) {
+            usedWindCharge = false;
+            mc.player.getInventory().selectedSlot = oldSlot;
+            originalPitch = null;
+        }
     }
 
     private PlayerEntity getNearestPlayer(double maxRange) {
@@ -134,13 +107,6 @@ public class WindMaceCombo extends Module {
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (stack != null && stack.getItem().getName(stack).getString().equalsIgnoreCase(itemName)) return i;
-        }
-        return -1;
-    }
-
-    private int findSwordInHotbar() {
-        for (int i = 0; i < 9; i++) {
-            if (mc.player.getInventory().getStack(i).getItem() instanceof SwordItem) return i;
         }
         return -1;
     }
