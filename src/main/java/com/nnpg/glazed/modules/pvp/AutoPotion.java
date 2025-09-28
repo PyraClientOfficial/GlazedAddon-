@@ -6,15 +6,30 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.ItemStack;
+import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.util.Hand;
-import net.minecraft.util.math.Box;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class AutoPotion extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+
+    public enum PotionType {
+        SPLASH_HEAL(Items.SPLASH_POTION),
+        SPLASH_FIRE_RESISTANCE(Items.SPLASH_POTION),
+        SPLASH_STRENGTH(Items.SPLASH_POTION),
+        SPLASH_POISON(Items.SPLASH_POTION),
+        LINGERING_HEAL(Items.LINGERING_POTION),
+        LINGERING_POISON(Items.LINGERING_POTION);
+
+        public final Item item;
+
+        PotionType(Item item) {
+            this.item = item;
+        }
+    }
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
         .name("range")
@@ -26,13 +41,10 @@ public class AutoPotion extends Module {
         .build()
     );
 
-    private final Setting<List<ItemStack>> potions = sgGeneral.add(new BlockListSetting.Builder()
+    private final Setting<List<PotionType>> potions = sgGeneral.add(new MultiEnumSetting.Builder<PotionType>()
         .name("potions")
         .description("Which potions to throw at your feet.")
-        .defaultValue(List.of(
-            new ItemStack(Items.SPLASH_POTION), // placeholder, we'll filter by type
-            new ItemStack(Items.LINGERING_POTION)
-        ))
+        .defaultValue(new ArrayList<>(List.of(PotionType.SPLASH_HEAL)))
         .build()
     );
 
@@ -50,14 +62,12 @@ public class AutoPotion extends Module {
         int potionSlot = findPotionSlot();
         if (potionSlot == -1) return;
 
-        // Switch to potion slot
         int oldSlot = mc.player.getInventory().selectedSlot;
         mc.player.getInventory().selectedSlot = potionSlot;
 
         // Throw potion at your feet
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
 
-        // Switch back to old slot
         mc.player.getInventory().selectedSlot = oldSlot;
     }
 
@@ -78,14 +88,14 @@ public class AutoPotion extends Module {
     }
 
     private int findPotionSlot() {
+        List<Item> allowedItems = new ArrayList<>();
+        for (PotionType type : potions.get()) allowedItems.add(type.item);
+
         for (int i = 0; i < 9; i++) {
-            ItemStack stack = mc.player.getInventory().getStack(i);
-            if (stack.isEmpty()) continue;
-            if (stack.getItem() == Items.SPLASH_POTION || stack.getItem() == Items.LINGERING_POTION) {
-                // You can add more filtering by potion type if needed
-                return i;
-            }
+            if (allowedItems.contains(mc.player.getInventory().getStack(i).getItem())) return i;
         }
+
         return -1;
     }
 }
+
