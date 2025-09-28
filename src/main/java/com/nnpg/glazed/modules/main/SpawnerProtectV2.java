@@ -4,7 +4,6 @@ import com.nnpg.glazed.GlazedAddon;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Blocks;
@@ -108,7 +107,7 @@ public class SpawnerProtectV2 extends Module {
     private long detectionTime = 0;
 
     public SpawnerProtectV2() {
-        super(GlazedAddon.CATEGORY, "SpawnerProtectV2", "Improved version of SpawnerProtect - reliable spawner mining and disconnect.");
+        super(GlazedAddon.CATEGORY, "SpawnerProtectV2", "Improved spawner protection with auto deposit and kick.");
     }
 
     @Override
@@ -126,7 +125,7 @@ public class SpawnerProtectV2 extends Module {
 
         switch (state) {
             case IDLE -> detectNearbyPlayers();
-            case MINING -> mineSpawners();
+            case MINING -> mineSpawnerAndLoot();
             case CHEST -> moveToChest();
             case DEPOSITING -> depositItems();
             case DISCONNECTING -> disconnectSafely();
@@ -153,21 +152,18 @@ public class SpawnerProtectV2 extends Module {
         }
     }
 
-    private void mineSpawners() {
-        if (currentSpawner == null) {
-            currentSpawner = findNearestSpawner();
-            if (currentSpawner == null) {
-                info("No spawners found nearby. Looking for chest...");
+    private void mineSpawnerAndLoot() {
+        if (currentSpawner == null) currentSpawner = findNearestSpawner();
+        if (currentSpawner != null) {
+            lookAt(currentSpawner);
+            KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
+            if (mc.world.getBlockState(currentSpawner).isAir()) {
+                info("Spawner broken! Moving to ender chest to deposit items...");
+                currentSpawner = null;
                 state = State.CHEST;
-                return;
             }
-        }
-
-        lookAt(currentSpawner);
-        KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
-
-        if (mc.world.getBlockState(currentSpawner).isAir()) {
-            currentSpawner = null;
+        } else {
+            state = State.CHEST;
         }
     }
 
@@ -227,22 +223,21 @@ public class SpawnerProtectV2 extends Module {
 
     private void depositItems() {
         if (!(mc.player.currentScreenHandler instanceof GenericContainerScreenHandler handler)) {
-            // Try to open chest
             mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND,
                     new net.minecraft.util.hit.BlockHitResult(Vec3d.ofCenter(targetChest), Direction.UP, targetChest, false));
             return;
         }
 
-        // Deposit all items from inventory
         for (int i = 0; i < 36; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (!stack.isEmpty() && stack.getItem() != Items.AIR) {
                 mc.interactionManager.clickSlot(handler.syncId, i + handler.slots.size() - 36, 0, SlotActionType.QUICK_MOVE, mc.player);
-                return; // Only transfer one item per tick to prevent lag
+                return; 
             }
         }
 
-        info("All items deposited. Disconnecting...");
+        info("All items deposited. Kicking player: " + detectedPlayer);
+        kickPlayer(detectedPlayer);
         state = State.DISCONNECTING;
     }
 
@@ -281,6 +276,10 @@ public class SpawnerProtectV2 extends Module {
         }
     }
 
+    private void kickPlayer(String playerName) {
+        mc.player.networkHandler.sendCommand("kick " + playerName + " [SpawnerProtectV2] " + playerName + " were too close!");
+    }
+
     private void sendWebhook() {
         if (!webhook.get() || webhookUrl.get().isEmpty()) return;
 
@@ -313,5 +312,9 @@ public class SpawnerProtectV2 extends Module {
         setSneaking(false);
         KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), false);
         KeyBinding.setKeyPressed(mc.options.jumpKey.getDefaultKey(), false);
+    }
+
+    private void info(String message) {
+        ChatUtils.info("[SpawnerProtectV2] " + message);
     }
 }
