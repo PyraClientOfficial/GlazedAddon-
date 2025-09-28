@@ -193,7 +193,6 @@ public class RTPBaseFinder extends Module {
         if (miningBlock == null || !miningBlock.equals(targetPos)) {
             miningBlock = targetPos;
             breakProgress = 0f;
-
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
                 PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
             ));
@@ -214,8 +213,9 @@ public class RTPBaseFinder extends Module {
 
         mc.player.swingHand(Hand.MAIN_HAND);
 
+        // 🔑 keep sending CONTINUE each tick while breaking
         mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-            PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
+            PlayerActionC2SPacket.Action.CONTINUE_DESTROY_BLOCK, targetPos, face
         ));
 
         if (breakProgress >= 1f) {
