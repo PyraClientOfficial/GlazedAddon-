@@ -7,7 +7,6 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.Vec3d;
@@ -31,12 +30,22 @@ public class WindMaceAuto extends Module {
         .build()
     );
 
+    private final Setting<Integer> endCooldown = sgGeneral.add(new IntSetting.Builder()
+        .name("end-cooldown")
+        .description("Ticks to wait after hitting the ground before restoring state.")
+        .defaultValue(20) // 1 second
+        .min(0).max(100)
+        .sliderMax(100)
+        .build()
+    );
+
     // state
-    private boolean active = false;        
+    private boolean active = false;
     private boolean usedWindCharge = false;
     private int oldSlot = -1;
     private float savedPitch = Float.NaN;
     private boolean prevKeyPressed = false;
+    private int groundTicks = 0;
 
     public WindMaceAuto() {
         super(GlazedAddon.pvp, "wind-mace-auto", "Use Wind Charge and hit with mace while falling down.");
@@ -44,7 +53,7 @@ public class WindMaceAuto extends Module {
 
     @Override
     public void onDeactivate() {
-        restoreState();
+        restoreState(true);
     }
 
     @EventHandler
@@ -65,7 +74,7 @@ public class WindMaceAuto extends Module {
             int windSlot = findItemInHotbar("wind");
             if (windSlot == -1) {
                 info("No Wind Charge found.");
-                restoreState();
+                restoreState(true);
                 return;
             }
             oldSlot = mc.player.getInventory().selectedSlot;
@@ -93,15 +102,19 @@ public class WindMaceAuto extends Module {
                         mc.player.swingHand(Hand.MAIN_HAND);
                         info("Attacked " + target.getName().getString() + " with mace.");
                     }
-                    else {
-                        info("No mace found in hotbar.");
-                    }
                 }
             }
         }
 
-        // Step 3: reset when on ground
-        if (mc.player.isOnGround()) restoreState();
+        // Step 3: reset after cooldown when on ground
+        if (mc.player.isOnGround()) {
+            groundTicks++;
+            if (groundTicks >= endCooldown.get()) {
+                restoreState(false);
+            }
+        } else {
+            groundTicks = 0;
+        }
     }
 
     private void startSequence() {
@@ -109,10 +122,12 @@ public class WindMaceAuto extends Module {
         usedWindCharge = false;
         oldSlot = -1;
         savedPitch = Float.NaN;
+        groundTicks = 0;
         info("Sequence started.");
     }
 
-    private void restoreState() {
+    private void restoreState(boolean force) {
+        if (!active && !force) return;
         if (mc.player == null) return;
         if (oldSlot != -1) mc.player.getInventory().selectedSlot = oldSlot;
         if (!Float.isNaN(savedPitch)) mc.player.setPitch(savedPitch);
@@ -121,6 +136,7 @@ public class WindMaceAuto extends Module {
         oldSlot = -1;
         savedPitch = Float.NaN;
         prevKeyPressed = false;
+        groundTicks = 0;
         info("Sequence ended.");
     }
 
