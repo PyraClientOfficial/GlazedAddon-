@@ -8,6 +8,7 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.*;
 import net.minecraft.potion.Potion;
+import net.minecraft.potion.PotionUtil;
 import net.minecraft.util.Hand;
 
 import java.util.List;
@@ -50,10 +51,10 @@ public class AutoPotion extends Module {
             .build()
     );
 
-    private final Setting<List<Potion>> potions = sgPotions.add(new EnumListSetting.Builder<Potion>()
+    private final Setting<List<Potion>> potions = sgPotions.add(new MultiEnumSetting.Builder<Potion>()
             .name("potions")
             .description("Which potions to throw or drink")
-            .defaultValue(List.of(Potions.HEALING, Potions.STRENGTH, Potions.POISON))
+            .defaultValue(List.of()) // empty by default
             .build()
     );
 
@@ -78,43 +79,35 @@ public class AutoPotion extends Module {
 
         int oldSlot = mc.player.getInventory().selectedSlot;
 
-        // Find splash or lingering potion
         int potionSlot = findPotionSlot();
         boolean drinking = false;
 
-        // If none found, try to find a regular potion to drink
         if (potionSlot == -1) {
             potionSlot = findDrinkablePotionSlot();
             drinking = potionSlot != -1;
         }
 
-        if (potionSlot == -1) return; // Nothing to use
+        if (potionSlot == -1) return;
 
-        // Handle rotation
         if (rotate.get() && originalPitch == null) {
             originalPitch = mc.player.getPitch();
-            mc.player.setPitch(90f); // look down
+            mc.player.setPitch(90f);
         }
 
-        // Switch to potion slot
         mc.player.getInventory().selectedSlot = potionSlot;
 
-        // Consume or throw
         mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
 
         cooldown = cooldownTicks.get();
 
-        // Rotate back
         if (rotate.get() && originalPitch != null) {
             mc.player.setPitch(originalPitch);
             originalPitch = null;
         }
 
-        // Switch to closest sword if enabled
         if (switchToSword.get()) {
             int swordSlot = findClosestSwordSlot();
-            if (swordSlot != -1) mc.player.getInventory().selectedSlot = swordSlot;
-            else mc.player.getInventory().selectedSlot = oldSlot;
+            mc.player.getInventory().selectedSlot = swordSlot != -1 ? swordSlot : oldSlot;
         } else {
             mc.player.getInventory().selectedSlot = oldSlot;
         }
@@ -123,7 +116,6 @@ public class AutoPotion extends Module {
     private PlayerEntity getNearestPlayer(double maxRange) {
         PlayerEntity nearest = null;
         double closest = maxRange * maxRange;
-
         for (PlayerEntity player : mc.world.getPlayers()) {
             if (player == mc.player || player.isDead() || player.isSpectator()) continue;
             double distSq = mc.player.squaredDistanceTo(player);
@@ -140,7 +132,7 @@ public class AutoPotion extends Module {
             ItemStack stack = mc.player.getInventory().getStack(i);
             Item item = stack.getItem();
             if (item instanceof SplashPotionItem || item instanceof LingeringPotionItem) {
-                Potion potionType = ((PotionItem) item).getPotion(stack);
+                Potion potionType = PotionUtil.getPotion(stack);
                 if (potions.get().contains(potionType)) return i;
             }
         }
@@ -152,7 +144,7 @@ public class AutoPotion extends Module {
             ItemStack stack = mc.player.getInventory().getStack(i);
             Item item = stack.getItem();
             if (item instanceof PotionItem && !(item instanceof SplashPotionItem) && !(item instanceof LingeringPotionItem)) {
-                Potion potionType = ((PotionItem) item).getPotion(stack);
+                Potion potionType = PotionUtil.getPotion(stack);
                 if (potions.get().contains(potionType)) return i;
             }
         }
