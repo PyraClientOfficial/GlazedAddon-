@@ -16,36 +16,39 @@ import java.util.List;
 public class AutoPotion extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
-    public enum PotionType {
-        SPLASH_HEAL(Items.SPLASH_POTION),
-        SPLASH_FIRE_RESISTANCE(Items.SPLASH_POTION),
-        SPLASH_STRENGTH(Items.SPLASH_POTION),
-        SPLASH_POISON(Items.SPLASH_POTION),
-        LINGERING_HEAL(Items.LINGERING_POTION),
-        LINGERING_POISON(Items.LINGERING_POTION);
-
-        public final Item item;
-
-        PotionType(Item item) {
-            this.item = item;
-        }
-    }
-
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
-        .name("range")
-        .description("How close a player must be to throw a potion.")
-        .defaultValue(5.0)
-        .min(1.0)
-        .max(20.0)
-        .sliderMax(20.0)
-        .build()
+            .name("range")
+            .description("How close a player must be to throw a potion.")
+            .defaultValue(5.0)
+            .min(1.0)
+            .max(20.0)
+            .sliderMax(20.0)
+            .build()
     );
 
-    private final Setting<List<PotionType>> potions = sgGeneral.add(new MultiEnumSetting.Builder<PotionType>()
-        .name("potions")
-        .description("Which potions to throw at your feet.")
-        .defaultValue(new ArrayList<>(List.of(PotionType.SPLASH_HEAL)))
-        .build()
+    // Individual potion selections
+    private final Setting<Boolean> splashHeal = sgGeneral.add(new BoolSetting.Builder()
+            .name("Splash Heal")
+            .defaultValue(true)
+            .build()
+    );
+
+    private final Setting<Boolean> splashStrength = sgGeneral.add(new BoolSetting.Builder()
+            .name("Splash Strength")
+            .defaultValue(false)
+            .build()
+    );
+
+    private final Setting<Boolean> splashPoison = sgGeneral.add(new BoolSetting.Builder()
+            .name("Splash Poison")
+            .defaultValue(false)
+            .build()
+    );
+
+    private final Setting<Boolean> lingeringHeal = sgGeneral.add(new BoolSetting.Builder()
+            .name("Lingering Heal")
+            .defaultValue(false)
+            .build()
     );
 
     public AutoPotion() {
@@ -89,7 +92,10 @@ public class AutoPotion extends Module {
 
     private int findPotionSlot() {
         List<Item> allowedItems = new ArrayList<>();
-        for (PotionType type : potions.get()) allowedItems.add(type.item);
+        if (splashHeal.get()) allowedItems.add(Items.SPLASH_POTION);
+        if (splashStrength.get()) allowedItems.add(Items.SPLASH_POTION);
+        if (splashPoison.get()) allowedItems.add(Items.SPLASH_POTION);
+        if (lingeringHeal.get()) allowedItems.add(Items.LINGERING_POTION);
 
         for (int i = 0; i < 9; i++) {
             if (allowedItems.contains(mc.player.getInventory().getStack(i).getItem())) return i;
@@ -98,4 +104,3 @@ public class AutoPotion extends Module {
         return -1;
     }
 }
-
