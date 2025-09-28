@@ -19,6 +19,7 @@ import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.WorldChunk;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ColumnESP extends Module {
     private final SettingGroup sgRender = settings.getDefaultGroup();
@@ -54,7 +55,15 @@ public class ColumnESP extends Module {
         .build()
     );
 
+    private final Setting<Boolean> chatFeedback = sgRender.add(new BoolSetting.Builder()
+        .name("Chat Feedback")
+        .description("Announce column detections in chat")
+        .defaultValue(true)
+        .build()
+    );
+
     // Detection
+    // NOTE: BlockListSetting was used in earlier versions; if unavailable replace with a ListSetting or other.
     private final Setting<List<Block>> detectBlocks = sgScan.add(new BlockListSetting.Builder()
         .name("Detect Blocks")
         .description("Blocks that should form columns to be detected")
@@ -67,8 +76,8 @@ public class ColumnESP extends Module {
         .description("Minimum vertical length of a column to highlight")
         .defaultValue(5)
         .min(2)
-        .max(100)
-        .sliderMax(100)
+        .max(200)
+        .sliderMax(200)
         .build()
     );
 
@@ -92,9 +101,41 @@ public class ColumnESP extends Module {
         .build()
     );
 
-    private record Column(BlockPos start, int length) {}
+    // Column record stores bottom-most BlockPos and length (number of blocks)
+    private static final class Column {
+        public final BlockPos start; // bottom block position (inclusive)
+        public final int length; // number of contiguous blocks upwards
+        public final Block block;
 
-    private final Set<Column> detectedColumns = Collections.synchronizedSet(new HashSet<>());
+        public Column(BlockPos start, int length, Block block) {
+            this.start = start;
+            this.length = length;
+            this.block = block;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Column)) return false;
+            Column other = (Column) o;
+            return length == other.length && start.equals(other.start) && block == other.block;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(start, length, block);
+        }
+
+        @Override
+        public String toString() {
+            return "Column{" + start.toShortString() + " len=" + length + " block=" + block + '}';
+        }
+    }
+
+    // Map chunk -> columns inside that chunk
+    private final Map<ChunkPos, Set<Column>> columnsByChunk = new ConcurrentHashMap<>();
+    // columns that we've already notified about (to avoid chat spam)
+    private final Set<Column> notified = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public ColumnESP() {
         super(GlazedAddon.esp, "ColumnESP", "Detects and highlights vertical block columns.");
@@ -102,64 +143,86 @@ public class ColumnESP extends Module {
 
     @Override
     public void onActivate() {
-        detectedColumns.clear();
+        columnsByChunk.clear();
 
         if (mc.world == null) return;
 
         for (Chunk chunk : Utils.chunks()) {
-            if (chunk instanceof WorldChunk worldChunk) {
-                scanChunk(worldChunk);
-            }
+            if (chunk instanceof WorldChunk worldChunk) scanChunk(worldChunk);
         }
+    }
+
+    @Override
+    public void onDeactivate() {
+        columnsByChunk.clear();
+        notified.clear();
     }
 
     @EventHandler
     private void onChunkLoad(ChunkDataEvent event) {
-        scanChunk(event.chunk());
+        if (event.chunk() instanceof WorldChunk wc) scanChunk(wc);
     }
 
     private void scanChunk(WorldChunk chunk) {
         ChunkPos cpos = chunk.getPos();
         int xStart = cpos.getStartX();
         int zStart = cpos.getStartZ();
-        int yMin = Math.max(chunk.getBottomY(), minY.get());
-        int yMax = Math.min(chunk.getBottomY() + chunk.getHeight(), maxY.get());
+        int yMin = Math.max(chunk.getBottomY(), this.minY.get());
+        int yMax = Math.min(chunk.getBottomY() + chunk.getHeight(), this.maxY.get());
 
         Set<Column> newDetected = new HashSet<>();
 
+        // scan columns in chunk
         for (int x = xStart; x < xStart + 16; x++) {
             for (int z = zStart; z < zStart + 16; z++) {
-                int length = 0;
-                BlockPos columnStart = null;
-
-                for (int y = yMin; y < yMax; y++) {
+                int y = yMin;
+                while (y < yMax) {
                     BlockPos pos = new BlockPos(x, y, z);
                     BlockState state = chunk.getBlockState(pos);
+                    Block b = state.getBlock();
 
-                    if (detectBlocks.get().contains(state.getBlock())) {
-                        if (length == 0) columnStart = pos;
-                        length++;
-                    } else {
-                        if (length >= minColumnLength.get() && columnStart != null) {
-                            newDetected.add(new Column(columnStart, length));
+                    if (detectBlocks.get().contains(b)) {
+                        // found bottom of a run (ensure it's the bottom-most contiguous block)
+                        int startY = y;
+                        int length = 0;
+                        while (y < yMax && chunk.getBlockState(new BlockPos(x, y, z)).isOf(b)) {
+                            length++;
+                            y++;
                         }
-                        length = 0;
-                        columnStart = null;
-                    }
-                }
 
-                if (length >= minColumnLength.get() && columnStart != null) {
-                    newDetected.add(new Column(columnStart, length));
+                        if (length >= minColumnLength.get()) {
+                            Column col = new Column(new BlockPos(x, startY, z), length, b);
+                            newDetected.add(col);
+                        }
+                    } else {
+                        y++;
+                    }
                 }
             }
         }
 
-        detectedColumns.removeIf(col -> {
-            ChunkPos blockChunk = new ChunkPos(col.start());
-            return blockChunk.equals(cpos) && !newDetected.contains(col);
-        });
+        // previous set for this chunk
+        Set<Column> old = columnsByChunk.getOrDefault(cpos, Collections.emptySet());
 
-        detectedColumns.addAll(newDetected);
+        // Determine added columns (newDetected - old)
+        for (Column col : newDetected) {
+            if (!old.contains(col)) {
+                // notify once
+                if (chatFeedback.get() && !notified.contains(col)) {
+                    info("§aColumnESP§f: Suspicious column at %s length=%d", col.start.toShortString(), col.length);
+                    notified.add(col);
+                }
+            }
+        }
+
+        // Determine removed columns (old - newDetected) and cleanup notifications
+        for (Column col : old) {
+            if (!newDetected.contains(col)) {
+                notified.remove(col);
+            }
+        }
+
+        columnsByChunk.put(cpos, newDetected);
     }
 
     @EventHandler
@@ -171,19 +234,26 @@ public class ColumnESP extends Module {
         Color lineColor = new Color(espColor.get());
         Color tracerColorValue = new Color(tracerColor.get());
 
-        synchronized (detectedColumns) {
-            for (Column col : detectedColumns) {
-                BlockPos start = col.start();
-                int length = col.length();
+        // Flatten and render all columns
+        for (Map.Entry<ChunkPos, Set<Column>> e : columnsByChunk.entrySet()) {
+            for (Column col : e.getValue()) {
+                // Re-validate column before rendering (world may have changed)
+                if (!isColumnStillValid(col)) continue;
 
-                // Draw a tall ESP box for the full column
-                event.renderer.box(
-                    start.getX(), start.getY(), start.getZ(),
-                    start.getX() + 1, start.getY() + length, start.getZ() + 1,
-                    sideColor, lineColor, shapeMode.get(), 0
-                );
+                BlockPos start = col.start;
+                int length = col.length;
 
-                // Draw one tracer to the middle of the column
+                // draw tall box (coordinates: minX,minY,minZ -> maxX,maxY,maxZ)
+                double minX = start.getX();
+                double minYd = start.getY();
+                double minZ = start.getZ();
+
+                double maxX = start.getX() + 1.0;
+                double maxYd = start.getY() + length; // endY + 1
+                double maxZ = start.getZ() + 1.0;
+
+                event.renderer.box(minX, minYd, minZ, maxX, maxYd, maxZ, sideColor, lineColor, shapeMode.get(), 0);
+
                 if (showTracers.get()) {
                     double midY = start.getY() + (length / 2.0);
                     Vec3d columnCenter = new Vec3d(start.getX() + 0.5, midY, start.getZ() + 0.5);
@@ -204,13 +274,21 @@ public class ColumnESP extends Module {
                         );
                     }
 
-                    event.renderer.line(
-                        startPos.x, startPos.y, startPos.z,
-                        columnCenter.x, columnCenter.y, columnCenter.z,
-                        tracerColorValue
-                    );
+                    event.renderer.line(startPos.x, startPos.y, startPos.z, columnCenter.x, columnCenter.y, columnCenter.z, tracerColorValue);
                 }
             }
         }
+    }
+
+    // Ensure every block in the column is still the expected block
+    private boolean isColumnStillValid(Column col) {
+        if (mc.world == null) return false;
+        Block b = col.block;
+        BlockPos start = col.start;
+        for (int i = 0; i < col.length; i++) {
+            BlockPos p = start.up(i);
+            if (!mc.world.getBlockState(p).isOf(b)) return false;
+        }
+        return true;
     }
 }
