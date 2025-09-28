@@ -56,6 +56,7 @@ public class GlazedAddon extends MeteorAddon {
         Modules.get().add(new GlowBerryESP());
         Modules.get().add(new ChunkFinder());
         Modules.get().add(new LegitAnchorMacro());
+        Modules.get().add(new AutoPotion());
         Modules.get().add(new SpawnerOrder());
         Modules.get().add(new RegionMap());
         Modules.get().add(new HoverTotem());
