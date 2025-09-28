@@ -7,7 +7,8 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.*;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Item;
 import net.minecraft.util.Hand;
 
 public class WindMaceAuto extends Module {
@@ -16,20 +17,10 @@ public class WindMaceAuto extends Module {
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
         .name("range")
         .description("Maximum distance to hit a player.")
-        .defaultValue(5.0)
+        .defaultValue(4.5)
         .min(1.0)
-        .max(20.0)
-        .sliderMax(20.0)
-        .build()
-    );
-
-    private final Setting<Integer> cooldownTicks = sgGeneral.add(new IntSetting.Builder()
-        .name("hit-cooldown")
-        .description("Cooldown between hits (ticks).")
-        .defaultValue(10)
-        .min(1)
-        .max(50)
-        .sliderMax(50)
+        .max(6.0)
+        .sliderMax(6.0)
         .build()
     );
 
@@ -40,14 +31,13 @@ public class WindMaceAuto extends Module {
         .build()
     );
 
-    private boolean triggered = false;   // true only when key pressed
+    private boolean triggered = false;
     private boolean usedWindCharge = false;
-    private int cooldown = 0;
     private int oldSlot = -1;
     private Float originalPitch = null;
 
     public WindMaceAuto() {
-        super(GlazedAddon.pvp, "wind-mace-auto", "Uses Wind Charge, then Mace when falling. Triggered by a keybind.");
+        super(GlazedAddon.pvp, "wind-mace-auto", "Boosts with Wind Charge and hits with Mace repeatedly while falling until you hit the ground.");
     }
 
     @Override
@@ -59,7 +49,7 @@ public class WindMaceAuto extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
 
-        // check if trigger key is pressed
+        // Check for trigger key
         if (triggerKey.get().isPressed() && !triggered) {
             triggered = true;
         }
@@ -71,39 +61,33 @@ public class WindMaceAuto extends Module {
 
         if (oldSlot == -1) oldSlot = mc.player.getInventory().selectedSlot;
 
-        if (cooldown > 0) {
-            cooldown--;
-            return;
-        }
-
-        // Step 1: Use Wind Charge
+        // Step 1: Use Wind Charge once
         if (!usedWindCharge) {
             int windSlot = findItemInHotbar("Wind Charge");
             if (windSlot != -1) {
                 mc.player.getInventory().selectedSlot = windSlot;
                 if (originalPitch == null) {
                     originalPitch = mc.player.getPitch();
-                    mc.player.setPitch(90f); // look down
+                    mc.player.setPitch(90f); // force look down
                 }
                 mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
                 usedWindCharge = true;
-                cooldown = 5;
                 return;
             }
         }
 
-        // Step 2: While falling, hit with Mace
-        if (usedWindCharge && mc.player.getVelocity().y < 0) {
+        // Step 2: While falling, hit as much as possible
+        if (usedWindCharge && mc.player.getVelocity().y < -0.05) {
             int maceSlot = findMaceInHotbar();
-            if (maceSlot != -1) {
+            if (maceSlot != -1 && mc.player.getAttackCooldownProgress(0) >= 1.0f) {
                 mc.player.getInventory().selectedSlot = maceSlot;
                 lookAtPlayer(target);
                 mc.interactionManager.attackEntity(mc.player, target);
-                cooldown = cooldownTicks.get();
+                mc.player.resetLastAttackedTicks();
             }
         }
 
-        // Step 3: Reset after landing
+        // Step 3: Reset once landed
         if (mc.player.isOnGround()) {
             reset();
         }
@@ -115,7 +99,6 @@ public class WindMaceAuto extends Module {
         triggered = false;
         usedWindCharge = false;
         originalPitch = null;
-        cooldown = 0;
     }
 
     private PlayerEntity getNearestPlayer(double maxRange) {
