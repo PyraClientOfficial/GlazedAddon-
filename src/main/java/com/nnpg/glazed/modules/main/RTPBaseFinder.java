@@ -161,6 +161,7 @@ public class RTPBaseFinder extends Module {
         // Raycast up to 5 blocks
         HitResult result = mc.player.raycast(5.0, 0.0f, false);
         if (!(result instanceof BlockHitResult bhr)) {
+            // nothing targeted
             miningBlock = null;
             breakProgress = 0f;
             return;
@@ -174,6 +175,17 @@ public class RTPBaseFinder extends Module {
             breakProgress = 0f;
             return;
         }
+
+        // Pick best pickaxe (if any) and set hotbar selection
+        int pickSlot = -1;
+        for (net.minecraft.item.Item pick : pickaxePriority) {
+            int s = findHotbarSlot(pick);
+            if (s != -1) {
+                pickSlot = s;
+                break;
+            }
+        }
+        if (pickSlot != -1) mc.player.getInventory().selectedSlot = pickSlot;
 
         // Creative → instant mine
         if (mc.player.getAbilities().creativeMode) {
@@ -189,7 +201,7 @@ public class RTPBaseFinder extends Module {
             return;
         }
 
-        // Survival mining
+        // Survival mining: start once when target changes
         if (miningBlock == null || !miningBlock.equals(targetPos)) {
             miningBlock = targetPos;
             breakProgress = 0f;
@@ -198,26 +210,16 @@ public class RTPBaseFinder extends Module {
             ));
         }
 
-        // Pick best pickaxe
-        int pickSlot = -1;
-        for (net.minecraft.item.Item pick : pickaxePriority) {
-            pickSlot = findHotbarSlot(pick);
-            if (pickSlot != -1) break;
-        }
-        if (pickSlot != -1) mc.player.getInventory().selectedSlot = pickSlot;
-
+        // Calculate progress using vanilla method
         float delta = mc.world.getBlockState(targetPos).calcBlockBreakingDelta(mc.player, mc.world, targetPos);
-        if (delta <= 0) return;
+        if (delta <= 0f) return;
 
         breakProgress += delta;
 
+        // swing animation
         mc.player.swingHand(Hand.MAIN_HAND);
 
-        // Re-send START each tick (no CONTINUE in your mappings)
-        mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
-            PlayerActionC2SPacket.Action.START_DESTROY_BLOCK, targetPos, face
-        ));
-
+        // Only send STOP when we finish (don't spam START every tick)
         if (breakProgress >= 1f) {
             mc.player.networkHandler.sendPacket(new PlayerActionC2SPacket(
                 PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK, targetPos, face
