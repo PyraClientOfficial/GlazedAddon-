@@ -37,16 +37,16 @@ public class SpawnerProtectV2 extends Module {
     private final Setting<Integer> spawnerRange = sgGeneral.add(new IntSetting.Builder()
             .name("spawner-range")
             .description("Max range to detect spawners")
-            .defaultValue(16)
-            .min(1).max(50)
+            .defaultValue(32) // Increased detection range
+            .min(1).max(100)
             .build()
     );
 
     private final Setting<Integer> emergencyDistance = sgGeneral.add(new IntSetting.Builder()
             .name("emergency-distance")
             .description("Disconnect if player is this close")
-            .defaultValue(7)
-            .min(1).max(20)
+            .defaultValue(12) // Increased emergency distance
+            .min(1).max(50)
             .build()
     );
 
@@ -101,7 +101,7 @@ public class SpawnerProtectV2 extends Module {
     private State state = State.IDLE;
     private Vec3d startPos;
     private boolean sneaking = false;
-    private BlockPos currentSpawner = null;
+    private List<BlockPos> spawnersToMine = new ArrayList<>();
     private BlockPos targetChest = null;
     private String detectedPlayer = "";
     private long detectionTime = 0;
@@ -125,7 +125,7 @@ public class SpawnerProtectV2 extends Module {
 
         switch (state) {
             case IDLE -> detectNearbyPlayers();
-            case MINING -> mineSpawnerAndLoot();
+            case MINING -> mineAllSpawners();
             case CHEST -> moveToChest();
             case DEPOSITING -> depositItems();
             case DISCONNECTING -> disconnectSafely();
@@ -146,45 +146,41 @@ public class SpawnerProtectV2 extends Module {
                 detectionTime = System.currentTimeMillis();
                 info("EMERGENCY! Player " + name + " detected at distance " + distance);
                 setSneaking(true);
+                spawnersToMine = findAllNearbySpawners();
                 state = State.MINING;
                 return;
             }
         }
     }
 
-    private void mineSpawnerAndLoot() {
-        if (currentSpawner == null) currentSpawner = findNearestSpawner();
-        if (currentSpawner != null) {
-            lookAt(currentSpawner);
-            KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
-            if (mc.world.getBlockState(currentSpawner).isAir()) {
-                info("Spawner broken! Moving to ender chest to deposit items...");
-                currentSpawner = null;
-                state = State.CHEST;
-            }
-        } else {
-            state = State.CHEST;
-        }
-    }
-
-    private BlockPos findNearestSpawner() {
+    private List<BlockPos> findAllNearbySpawners() {
+        List<BlockPos> spawnerList = new ArrayList<>();
         BlockPos playerPos = mc.player.getBlockPos();
-        BlockPos nearest = null;
-        double minDist = Double.MAX_VALUE;
 
         for (BlockPos pos : BlockPos.iterate(playerPos.add(-spawnerRange.get(), -spawnerRange.get(), -spawnerRange.get()),
                 playerPos.add(spawnerRange.get(), spawnerRange.get(), spawnerRange.get()))) {
             if (mc.world.getBlockState(pos).getBlock() == Blocks.SPAWNER) {
-                double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(pos));
-                if (dist < minDist) {
-                    minDist = dist;
-                    nearest = pos.toImmutable();
-                }
+                spawnerList.add(pos.toImmutable());
             }
         }
 
-        if (nearest != null) info("Found spawner at " + nearest);
-        return nearest;
+        info("Found " + spawnerList.size() + " spawner(s) nearby.");
+        return spawnerList;
+    }
+
+    private void mineAllSpawners() {
+        if (!spawnersToMine.isEmpty()) {
+            BlockPos spawner = spawnersToMine.get(0);
+            if (mc.world.getBlockState(spawner).isAir()) {
+                spawnersToMine.remove(0);
+                return;
+            }
+            lookAt(spawner);
+            KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
+        } else {
+            info("All spawners broken! Moving to ender chest...");
+            state = State.CHEST;
+        }
     }
 
     private void moveToChest() {
@@ -228,17 +224,21 @@ public class SpawnerProtectV2 extends Module {
             return;
         }
 
+        boolean hasItems = false;
         for (int i = 0; i < 36; i++) {
             ItemStack stack = mc.player.getInventory().getStack(i);
             if (!stack.isEmpty() && stack.getItem() != Items.AIR) {
                 mc.interactionManager.clickSlot(handler.syncId, i + handler.slots.size() - 36, 0, SlotActionType.QUICK_MOVE, mc.player);
-                return; 
+                hasItems = true;
+                return; // transfer one item per tick
             }
         }
 
-        info("All items deposited. Kicking player: " + detectedPlayer);
-        kickPlayer(detectedPlayer);
-        state = State.DISCONNECTING;
+        if (!hasItems) {
+            info("All items deposited. Kicking player: " + detectedPlayer);
+            kickPlayer(detectedPlayer);
+            state = State.DISCONNECTING;
+        }
     }
 
     private void disconnectSafely() {
