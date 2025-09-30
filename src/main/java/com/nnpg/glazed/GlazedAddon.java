@@ -46,7 +46,7 @@ public class GlazedAddon extends MeteorAddon {
         Modules.get().add(new OneByOneHoles());
         Modules.get().add(new KelpESP());
         Modules.get().add(new SuspiciousActivity());
-        Modules.get().add(new PlayerBlockESP());
+        Modules.get().add(new PlacedBlockESP());
         Modules.get().add(new ColumnESP());
         Modules.get().add(new DeepslateESP());
         Modules.get().add(new RotatedDeepslateESP());
