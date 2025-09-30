@@ -11,6 +11,7 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.chunk.WorldChunk;
 import net.minecraft.world.chunk.Chunk;
 
@@ -22,61 +23,53 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * SuspiciousActivity
  *
- * - Advanced, "closed" detector containing many heuristics. It doesn't render highlights,
- *   but logs suspicious chunks/areas to chat and keeps an internal set of suspicious chunk coordinates.
- * - It is intentionally minimal in settings (not user-exposed list of detections) by request,
- *   but you can toggle it on/off in the module list.
- *
- * Heuristics included (per-chunk):
- *  - large counts of chests/shulker boxes (likely storage)
- *  - long vertical obsidian columns (foundation / beacon pillars)
- *  - many torches / lanterns (indicates player activity)
- *  - many signs (player messages)
- *  - many placed crops / glowberries (farms)
- *  - consecutive non-natural blocks (stone bricks, planks, stairs)
- *
- * This module is intentionally conservative (avoid false positives) but logs findings in chat.
+ * Detects many heuristics that suggest an area has player activity.
+ * Does not render blocks, only logs suspicious chunks once.
  */
 public class SuspiciousActivity extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
     private final Setting<Integer> torchThreshold = sgGeneral.add(new IntSetting.Builder()
-            .name("torch-threshold")
-            .description("Number of torches in a chunk to mark it suspicious.")
-            .defaultValue(48)
-            .min(1)
-            .max(4096)
-            .build()
+        .name("torch-threshold")
+        .description("Number of torches in a chunk to mark it suspicious.")
+        .defaultValue(48)
+        .min(1)
+        .max(4096)
+        .build()
     );
 
     private final Setting<Integer> storageThreshold = sgGeneral.add(new IntSetting.Builder()
-            .name("storage-threshold")
-            .description("Number of chests/shulkers in a chunk to mark suspicious.")
-            .defaultValue(6)
-            .min(1)
-            .max(128)
-            .build()
+        .name("storage-threshold")
+        .description("Number of chests/shulkers in a chunk to mark suspicious.")
+        .defaultValue(6)
+        .min(1)
+        .max(128)
+        .build()
     );
 
     private final Setting<Integer> obsidianColumnLength = sgGeneral.add(new IntSetting.Builder()
-            .name("obsidian-column-length")
-            .description("Min vertical obsidian column length that triggers suspicion.")
-            .defaultValue(12)
-            .min(4)
-            .max(256)
-            .build()
+        .name("obsidian-column-length")
+        .description("Min vertical obsidian column length that triggers suspicion.")
+        .defaultValue(12)
+        .min(4)
+        .max(256)
+        .build()
     );
 
     // Internal: set of suspicious chunk coords (string "cx,cz")
     private final Set<String> suspiciousChunks = ConcurrentHashMap.newKeySet();
 
+    // Timer for periodic re-log
+    private long lastLogTime = 0;
+
     public SuspiciousActivity() {
-        super(GlazedAddon.esp, "suspicious-activity", "Detects many patterns that indicate an active base/area (no direct rendering).");
+        super(GlazedAddon.esp, "suspicious-activity", "Detects patterns that indicate an active base/area (no rendering).");
     }
 
     @Override
     public void onActivate() {
         suspiciousChunks.clear();
+        lastLogTime = 0;
     }
 
     @EventHandler
@@ -87,9 +80,8 @@ public class SuspiciousActivity extends Module {
 
     @EventHandler
     private void onBlockUpdate(BlockUpdateEvent event) {
-        // small quick re-check on block updates near player
+        if (mc.player == null || mc.world == null) return;
         BlockPos pos = event.pos();
-        if (mc.player == null) return;
         if (mc.player.getBlockPos().isWithinDistance(pos, 48)) {
             Chunk c = mc.world.getChunk(pos);
             if (c instanceof WorldChunk wc) analyzeChunk(wc);
@@ -97,13 +89,16 @@ public class SuspiciousActivity extends Module {
     }
 
     @EventHandler
-    private void onTick(TickEvent.ClientTickEvent event) {
-        // periodically re-log suspicious chunks to chat (once every ~10s)
-        if (!isActive()) return;
-        if (mc.player == null || mc.world == null) return;
+    private void onTick(TickEvent.Pre event) {
+        if (!isActive() || mc.player == null || mc.world == null) return;
 
-        // simple rate-limited logger: only log when set changes (we keep internal set)
-        // nothing to do each tick to avoid spam
+        long now = System.currentTimeMillis();
+        if (now - lastLogTime >= 10000) { // every 10s
+            if (!suspiciousChunks.isEmpty()) {
+                ChatUtils.info("[SuspiciousActivity] Currently suspicious chunks: " + suspiciousChunks);
+            }
+            lastLogTime = now;
+        }
     }
 
     private void analyzeChunk(WorldChunk chunk) {
@@ -117,14 +112,12 @@ public class SuspiciousActivity extends Module {
         int cx = cp.x;
         int cz = cp.z;
 
-        // iterate through chunk blocks (be mindful of performance)
         int bottomY = chunk.getBottomY();
         int topY = bottomY + chunk.getHeight();
 
         for (int x = cx * 16; x < cx * 16 + 16; x++) {
             for (int z = cz * 16; z < cz * 16 + 16; z++) {
                 for (int y = Math.max(bottomY, -64); y < Math.min(topY, 320); y += 4) {
-                    // sample every 4 blocks vertically to limit cost
                     BlockPos pos = new BlockPos(x, y, z);
                     Block b = chunk.getBlockState(pos).getBlock();
 
@@ -161,7 +154,6 @@ public class SuspiciousActivity extends Module {
             reason.append("stonebuild(").append(stoneBrickCount).append(") ");
         }
 
-        // Obs columns detection (scan a few sample columns in chunk)
         boolean obsColumnFound = false;
         outer:
         for (int x = cx * 16; x < cx * 16 + 16; x += 4) {
@@ -194,14 +186,10 @@ public class SuspiciousActivity extends Module {
                 ChatUtils.warning("[SuspiciousActivity] suspicious chunk " + chunkKey + " -> " + reason.toString().trim());
             }
         } else {
-            // if previously suspicious and now not, remove it
             suspiciousChunks.remove(chunkKey);
         }
     }
 
-    /**
-     * Expose detected suspicious chunk coordinates for other modules.
-     */
     public Set<String> getSuspiciousChunks() {
         return Collections.unmodifiableSet(new HashSet<>(suspiciousChunks));
     }
