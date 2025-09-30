@@ -10,6 +10,7 @@ import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.SignBlock;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.chunk.WorldChunk;
@@ -81,7 +82,7 @@ public class SuspiciousActivity extends Module {
     @EventHandler
     private void onBlockUpdate(BlockUpdateEvent event) {
         if (mc.player == null || mc.world == null) return;
-        BlockPos pos = event.pos();
+        BlockPos pos = event.pos; // fixed for 1.21.4
         if (mc.player.getBlockPos().isWithinDistance(pos, 48)) {
             Chunk c = mc.world.getChunk(pos);
             if (c instanceof WorldChunk wc) analyzeChunk(wc);
@@ -122,8 +123,8 @@ public class SuspiciousActivity extends Module {
                     Block b = chunk.getBlockState(pos).getBlock();
 
                     if (b == Blocks.TORCH || b == Blocks.SOUL_TORCH || b == Blocks.LANTERN || b == Blocks.SOUL_LANTERN) torchCount++;
-                    else if (b == Blocks.CHEST || b == Blocks.TRAPPED_CHEST || b == Blocks.SHULKER_BOX || b == Blocks.BARREL) storageCount++;
-                    else if (b == Blocks.SIGN || b == Blocks.OAK_SIGN || b == Blocks.OAK_WALL_SIGN) signCount++;
+                    else if (b == Blocks.CHEST || b == Blocks.TRAPPED_CHEST || b == Blocks.BARREL || b == Blocks.SHULKER_BOX) storageCount++;
+                    else if (b instanceof SignBlock) signCount++; // fixed
                     else if (b == Blocks.WHEAT || b == Blocks.CARROTS || b == Blocks.POTATOES || b == Blocks.BEETROOTS) cropCount++;
                     else if (b == Blocks.STONE_BRICKS || b == Blocks.CRACKED_STONE_BRICKS || b == Blocks.MOSSY_STONE_BRICKS) stoneBrickCount++;
                 }
