@@ -3,7 +3,6 @@ package com.nnpg.glazed.modules.esp;
 import com.nnpg.glazed.GlazedAddon;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.BlockUpdateEvent;
-import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.util.math.BlockPos;
@@ -20,7 +19,7 @@ public class PlayerBlockESP extends Module {
 
     @EventHandler
     private void onBlockUpdate(BlockUpdateEvent event) {
-        // When a new block appears (not air), assume it was placed
+        // If a new solid block appears, track it
         if (!event.newState.isAir()) {
             placedBlocks.add(event.pos.toImmutable());
         }
@@ -29,11 +28,19 @@ public class PlayerBlockESP extends Module {
     @EventHandler
     private void onRender3D(Render3DEvent event) {
         for (BlockPos pos : placedBlocks) {
+            // Expand BlockPos into full cube coordinates
+            double x1 = pos.getX();
+            double y1 = pos.getY();
+            double z1 = pos.getZ();
+            double x2 = x1 + 1;
+            double y2 = y1 + 1;
+            double z2 = z1 + 1;
+
             event.renderer.box(
-                pos,
-                1, 0, 0, 0.5f,   // RGBA (red with 50% opacity)
-                1, 0, 0, 0.2f,   // Outline color (darker red)
-                true             // Draw both box and outline
+                x1, y1, z1, x2, y2, z2,
+                1, 0, 0, 0.5f,   // Fill color (red, 50% opacity)
+                1, 0, 0, 0.8f,   // Outline color (solid red)
+                true             // Draw outline + filled
             );
         }
     }
