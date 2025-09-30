@@ -5,8 +5,6 @@ import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.BlockUpdateEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.systems.modules.Modules;
-import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.util.math.BlockPos;
 
@@ -14,8 +12,6 @@ import java.util.HashSet;
 import java.util.Set;
 
 public class PlayerBlockESP extends Module {
-    private final SettingGroup sgGeneral = settings.getDefaultGroup();
-
     private final Set<BlockPos> placedBlocks = new HashSet<>();
 
     public PlayerBlockESP() {
@@ -24,8 +20,8 @@ public class PlayerBlockESP extends Module {
 
     @EventHandler
     private void onBlockUpdate(BlockUpdateEvent event) {
-        // When a block appears (not air), assume it was placed
-        if (!event.state.isAir()) {
+        // When a new block appears (not air), assume it was placed
+        if (!event.newState.isAir()) {
             placedBlocks.add(event.pos.toImmutable());
         }
     }
@@ -33,7 +29,12 @@ public class PlayerBlockESP extends Module {
     @EventHandler
     private void onRender3D(Render3DEvent event) {
         for (BlockPos pos : placedBlocks) {
-            RenderUtils.drawBox(event.matrixStack, pos, 1, 0, 0, 0.5f); // red box highlight
+            event.renderer.box(
+                pos,
+                1, 0, 0, 0.5f,   // RGBA (red with 50% opacity)
+                1, 0, 0, 0.2f,   // Outline color (darker red)
+                true             // Draw both box and outline
+            );
         }
     }
 }
