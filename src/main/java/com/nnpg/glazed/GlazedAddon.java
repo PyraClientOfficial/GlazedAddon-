@@ -21,7 +21,6 @@ public class GlazedAddon extends MeteorAddon {
     public static final Category CATEGORY = new Category("PYRA-MAIN");
     public static final Category esp = new Category("DONUT BASE HUNTING");
     public static final Category pvp = new Category("PYRA-PVP");
-    public static final Category render = new Category("RENDER");
 
 
 
