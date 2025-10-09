@@ -6,33 +6,27 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.block.Block;
-import net.minecraft.block.Blocks;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.Items;
 import net.minecraft.item.PickaxeItem;
 import net.minecraft.item.ItemStack;
-import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.math.Direction;
 
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
+import java.util.Locale;
 
 /**
- * AutoMiner
- * - Settings allow entering two coords (x,y,z) as strings "x,y,z" for corner A and corner B.
- * - Modes: ALL, ORES, CUSTOM (list of block IDs/names).
- * - Walks to area, mines blocks in a snake pattern, uses simple human-like rotation & delays.
- * - Protection: stops on hurt, low health, inventory full, tool missing/broken.
+ * Improved AutoMiner:
+ * - Mines only inside the specified cuboid (corner A/B)
+ * - Loops until the entire area is air
+ * - Human-like rotation, delays and safety checks
  *
- * NOTE: This is deliberately simple path-wise (no baritone). It moves by pressing forward
- * while steering to the target block center. If you want real pathfinding, integrate with a
- * pathfinder library.
+ * NOTE: No 3D render included (to avoid renderer API mismatches). You can enable a chat "show-area" message.
  */
 public class AutoMiner extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -143,6 +137,13 @@ public class AutoMiner extends Module {
         .build()
     );
 
+    private final Setting<Boolean> showArea = sgArea.add(new BoolSetting.Builder()
+        .name("show-area")
+        .description("Print area coordinates in chat on start")
+        .defaultValue(true)
+        .build()
+    );
+
     // Internal runtime fields
     private BlockPos min = null;
     private BlockPos max = null;
@@ -150,9 +151,7 @@ public class AutoMiner extends Module {
     private int currentTargetIndex = 0;
     private boolean mining = false;
     private int breakHoldTicksLeft = 0;
-    private Random rnd = ThreadLocalRandom.current();
-    private float targetYaw = 0f;
-    private float targetPitch = 0f;
+    private final Random rnd = ThreadLocalRandom.current();
 
     public AutoMiner() {
         super(GlazedAddon.CATEGORY, "auto-miner", "Human-like auto miner using typed coordinates (snake pattern).");
@@ -160,7 +159,6 @@ public class AutoMiner extends Module {
 
     @Override
     public void onActivate() {
-        // parse coords
         if (!parseCorners()) {
             ChatUtils.error("[AutoMiner] Invalid corner coordinates. Use format: x,y,z");
             toggle();
@@ -171,7 +169,12 @@ public class AutoMiner extends Module {
         currentTargetIndex = 0;
         mining = true;
         breakHoldTicksLeft = 0;
-        ChatUtils.info("[AutoMiner] Started. Targets: " + targets.size());
+
+        if (showArea.get()) {
+            ChatUtils.info(String.format("[AutoMiner] Area: min=%s max=%s totalTargets=%d", min.toShortString(), max.toShortString(), targets.size()));
+        } else {
+            ChatUtils.info("[AutoMiner] Started.");
+        }
     }
 
     @Override
@@ -182,7 +185,6 @@ public class AutoMiner extends Module {
         ChatUtils.info("[AutoMiner] Stopped.");
     }
 
-    // Tick handler - main loop
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (!mining || mc.player == null || mc.world == null) return;
@@ -206,25 +208,30 @@ public class AutoMiner extends Module {
             return;
         }
 
-        // If no more targets, stop
+        // If we've consumed all targets in this pass, verify area and either rebuild or stop
         if (currentTargetIndex >= targets.size()) {
-            ChatUtils.info("[AutoMiner] Area cleared. Stopping.");
-            toggle();
-            return;
+            if (isAreaCleared()) {
+                ChatUtils.info("[AutoMiner] Area cleared (all air). Stopping.");
+                toggle();
+                return;
+            } else {
+                // Rebuild a fresh target list of remaining non-air blocks and continue
+                buildTargetList(); // will repopulate targets for remaining blocks
+                currentTargetIndex = 0;
+                if (targets.isEmpty()) {
+                    // double-check - if still empty, stop
+                    ChatUtils.info("[AutoMiner] No valid targets after rebuild. Stopping.");
+                    toggle();
+                    return;
+                }
+            }
         }
 
+        // Advance to next non-air & matching target if current is invalid
         BlockPos target = targets.get(currentTargetIndex);
-
-        // If block is already air (broken), advance
-        if (mc.world.getBlockState(target).isAir()) {
+        if (mc.world.getBlockState(target).isAir() || !shouldMineTarget(target)) {
             currentTargetIndex++;
             breakHoldTicksLeft = 0;
-            return;
-        }
-
-        // If block doesn't match filter (in certain modes), skip
-        if (!shouldMineTarget(target)) {
-            currentTargetIndex++;
             return;
         }
 
@@ -237,21 +244,16 @@ public class AutoMiner extends Module {
             double pitch = Math.toDegrees(-Math.asin(dir.y));
             smoothLook(yaw, pitch);
             KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), true);
-            // small chance to strafe or jump to appear human - keep conservative
+            // Do not attempt to mine until within reach
             return;
         } else {
-            // within reach — stop moving forward
             KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), false);
         }
 
         // Sneak option
-        if (useSneakWhenMining.get()) {
-            KeyBinding.setKeyPressed(mc.options.sneakKey.getDefaultKey(), true);
-        } else {
-            KeyBinding.setKeyPressed(mc.options.sneakKey.getDefaultKey(), false);
-        }
+        KeyBinding.setKeyPressed(mc.options.sneakKey.getDefaultKey(), useSneakWhenMining.get());
 
-        // Look at block center and start breaking
+        // Look at block center and start/continue breaking
         Vec3d center = Vec3d.ofCenter(target);
         double dx = center.x - mc.player.getX();
         double dz = center.z - mc.player.getZ();
@@ -269,21 +271,21 @@ public class AutoMiner extends Module {
                 KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), false);
                 // small random delay before considering block broken
                 int pause = rnd.nextInt(1 + breakRandomness.get());
-                try { Thread.sleep(Math.min(150, pause * 10L)); } catch (Exception ignored) {}
-                // advance - next tick we'll check if block is broken, otherwise we will attempt again
+                // avoid Thread.sleep in tick loop; simulate short pause by skipping a tick or two:
+                // We'll simply advance index and let next tick validate if block is air.
                 currentTargetIndex++;
             }
             return;
         }
 
-        // Start a new break action if we have a valid pickaxe (or hand if allowed)
+        // Need a pickaxe?
         if (!hasValidTool()) {
             ChatUtils.warning("[AutoMiner] No pickaxe found in hotbar. Stopping.");
             toggle();
             return;
         }
 
-        // Decide break duration and start holding attack
+        // Start a new break action
         int tickHold = baseBreakTicks.get() + rnd.nextInt(breakRandomness.get() + 1);
         breakHoldTicksLeft = Math.max(1, tickHold);
         KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
@@ -291,9 +293,11 @@ public class AutoMiner extends Module {
 
     // Smoothly rotate player toward yaw/pitch at configured speed
     private void smoothLook(double yawWanted, double pitchWanted) {
-        if (!rotateSmoothing.get()) {
-            mc.player.setYaw((float) yawWanted);
-            mc.player.setPitch((float) pitchWanted);
+        if (!rotateSmoothing.get() || mc.player == null) {
+            if (mc.player != null) {
+                mc.player.setYaw((float) yawWanted);
+                mc.player.setPitch((float) pitchWanted);
+            }
             return;
         }
 
@@ -344,12 +348,11 @@ public class AutoMiner extends Module {
         return new int[] { Integer.parseInt(parts[0].trim()), Integer.parseInt(parts[1].trim()), Integer.parseInt(parts[2].trim()) };
     }
 
-    // Build snake-pattern target list between min and max
+    // Build snake-pattern target list between min and max, only non-air and matching filter
     private void buildTargetList() {
         targets.clear();
-        if (min == null || max == null) return;
+        if (min == null || max == null || mc.world == null) return;
 
-        // Decide ordering: top-down or bottom-up? We'll go top-down (so we don't cause falling)
         int yStart = max.getY();
         int yEnd = min.getY();
 
@@ -359,22 +362,24 @@ public class AutoMiner extends Module {
             for (int x = min.getX(); x <= max.getX(); x++) {
                 if (xForward) {
                     for (int z = min.getZ(); z <= max.getZ(); z++) {
-                        targets.add(new BlockPos(x, y, z));
+                        BlockPos p = new BlockPos(x, y, z);
+                        if (!mc.world.getBlockState(p).isAir() && shouldMineTarget(p)) targets.add(p);
                     }
                 } else {
                     for (int z = max.getZ(); z >= min.getZ(); z--) {
-                        targets.add(new BlockPos(x, y, z));
+                        BlockPos p = new BlockPos(x, y, z);
+                        if (!mc.world.getBlockState(p).isAir() && shouldMineTarget(p)) targets.add(p);
                     }
                 }
                 xForward = !xForward;
             }
         }
-
-        // Optionally shuffle a little to humanize (we won't shuffle because we want full coverage)
     }
 
     private boolean shouldMineTarget(BlockPos pos) {
-        Block b = mc.world.getBlockState(pos).getBlock();
+        if (mc.world == null) return false;
+        net.minecraft.block.Block b = mc.world.getBlockState(pos).getBlock();
+
         if (mode.get() == Mode.ALL) return true;
 
         if (mode.get() == Mode.ORES) {
@@ -383,7 +388,6 @@ public class AutoMiner extends Module {
 
         if (mode.get() == Mode.CUSTOM) {
             String name = b.getName().getString().toLowerCase(Locale.ROOT);
-            // simple contains match against custom list
             for (String s : customBlocks.get()) {
                 if (s == null) continue;
                 String t = s.trim().toLowerCase(Locale.ROOT);
@@ -397,15 +401,14 @@ public class AutoMiner extends Module {
         return false;
     }
 
-    private boolean isOreBlock(Block b) {
-        return b == Blocks.COAL_ORE || b == Blocks.IRON_ORE || b == Blocks.COPPER_ORE ||
-               b == Blocks.GOLD_ORE || b == Blocks.REDSTONE_ORE || b == Blocks.LAPIS_ORE ||
-               b == Blocks.DIAMOND_ORE || b == Blocks.EMERALD_ORE || b == Blocks.NETHER_QUARTZ_ORE ||
-               b == Blocks.ANCIENT_DEBRIS || b == Blocks.NETHER_GOLD_ORE;
+    private boolean isOreBlock(net.minecraft.block.Block b) {
+        return b == net.minecraft.block.Blocks.COAL_ORE || b == net.minecraft.block.Blocks.IRON_ORE || b == net.minecraft.block.Blocks.COPPER_ORE ||
+               b == net.minecraft.block.Blocks.GOLD_ORE || b == net.minecraft.block.Blocks.REDSTONE_ORE || b == net.minecraft.block.Blocks.LAPIS_ORE ||
+               b == net.minecraft.block.Blocks.DIAMOND_ORE || b == net.minecraft.block.Blocks.EMERALD_ORE || b == net.minecraft.block.Blocks.NETHER_QUARTZ_ORE ||
+               b == net.minecraft.block.Blocks.ANCIENT_DEBRIS || b == net.minecraft.block.Blocks.NETHER_GOLD_ORE;
     }
 
     private boolean isInventoryFull() {
-        // check main inventory slots 9-35 (player inventory excluding hotbar)
         for (int i = 0; i < 36; i++) {
             ItemStack st = mc.player.getInventory().getStack(i);
             if (st.isEmpty()) return false;
@@ -414,7 +417,6 @@ public class AutoMiner extends Module {
     }
 
     private boolean hasValidTool() {
-        // look in hotbar for a pickaxe
         for (int i = 0; i < 9; i++) {
             ItemStack st = mc.player.getInventory().getStack(i);
             if (st != null && !st.isEmpty()) {
@@ -423,6 +425,19 @@ public class AutoMiner extends Module {
             }
         }
         return false;
+    }
+
+    private boolean isAreaCleared() {
+        if (min == null || max == null || mc.world == null) return true;
+        for (int x = min.getX(); x <= max.getX(); x++) {
+            for (int y = min.getY(); y <= max.getY(); y++) {
+                for (int z = min.getZ(); z <= max.getZ(); z++) {
+                    BlockPos p = new BlockPos(x, y, z);
+                    if (!mc.world.getBlockState(p).isAir() && shouldMineTarget(p)) return false;
+                }
+            }
+        }
+        return true;
     }
 
     private void stopAllKeys() {
