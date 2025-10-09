@@ -7,17 +7,15 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.option.KeyBinding;
-import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Item;
-import net.minecraft.item.Items;
 import net.minecraft.item.PickaxeItem;
 import net.minecraft.item.ItemStack;
+import net.minecraft.particle.ParticleTypes;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.stream.Collectors;
 import java.util.Locale;
 
 /**
@@ -25,14 +23,14 @@ import java.util.Locale;
  * - Mines only inside the specified cuboid (corner A/B)
  * - Loops until the entire area is air
  * - Human-like rotation, delays and safety checks
- *
- * NOTE: No 3D render included (to avoid renderer API mismatches). You can enable a chat "show-area" message.
+ * - Visual markers via particles (safe cross-version approach)
  */
 public class AutoMiner extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgArea = settings.createGroup("Area");
     private final SettingGroup sgBehavior = settings.createGroup("Behavior");
     private final SettingGroup sgSafety = settings.createGroup("Safety");
+    private final SettingGroup sgVisual = settings.createGroup("Visual");
 
     private final Setting<String> cornerA = sgArea.add(new StringSetting.Builder()
         .name("corner-a")
@@ -75,7 +73,7 @@ public class AutoMiner extends Module {
 
     private final Setting<Integer> baseBreakTicks = sgBehavior.add(new IntSetting.Builder()
         .name("base-break-ticks")
-        .description("Base number of ticks to hold attack to break block (randomized)")
+        .description("Base ticks to hold attack to break block (randomized)")
         .defaultValue(6)
         .min(1)
         .max(200)
@@ -144,7 +142,32 @@ public class AutoMiner extends Module {
         .build()
     );
 
-    // Internal runtime fields
+    private final Setting<Boolean> showParticles = sgVisual.add(new BoolSetting.Builder()
+        .name("show-particles")
+        .description("Use small particles to highlight area and next targets")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<Integer> particleIntervalTicks = sgVisual.add(new IntSetting.Builder()
+        .name("particle-interval")
+        .description("Ticks between particle updates")
+        .defaultValue(6)
+        .min(1)
+        .max(40)
+        .build()
+    );
+
+    private final Setting<Integer> highlightTargets = sgVisual.add(new IntSetting.Builder()
+        .name("highlight-targets")
+        .description("How many upcoming targets to mark with particles")
+        .defaultValue(6)
+        .min(0)
+        .max(64)
+        .build()
+    );
+
+    // runtime
     private BlockPos min = null;
     private BlockPos max = null;
     private final List<BlockPos> targets = new ArrayList<>();
@@ -152,6 +175,7 @@ public class AutoMiner extends Module {
     private boolean mining = false;
     private int breakHoldTicksLeft = 0;
     private final Random rnd = ThreadLocalRandom.current();
+    private int tickCounter = 0;
 
     public AutoMiner() {
         super(GlazedAddon.CATEGORY, "auto-miner", "Human-like auto miner using typed coordinates (snake pattern).");
@@ -169,6 +193,7 @@ public class AutoMiner extends Module {
         currentTargetIndex = 0;
         mining = true;
         breakHoldTicksLeft = 0;
+        tickCounter = 0;
 
         if (showArea.get()) {
             ChatUtils.info(String.format("[AutoMiner] Area: min=%s max=%s totalTargets=%d", min.toShortString(), max.toShortString(), targets.size()));
@@ -188,6 +213,7 @@ public class AutoMiner extends Module {
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (!mining || mc.player == null || mc.world == null) return;
+        tickCounter++;
 
         // Safety checks
         if (stopOnHurt.get() && mc.player.hurtTime > 0) {
@@ -215,11 +241,9 @@ public class AutoMiner extends Module {
                 toggle();
                 return;
             } else {
-                // Rebuild a fresh target list of remaining non-air blocks and continue
-                buildTargetList(); // will repopulate targets for remaining blocks
+                buildTargetList();
                 currentTargetIndex = 0;
                 if (targets.isEmpty()) {
-                    // double-check - if still empty, stop
                     ChatUtils.info("[AutoMiner] No valid targets after rebuild. Stopping.");
                     toggle();
                     return;
@@ -227,7 +251,13 @@ public class AutoMiner extends Module {
             }
         }
 
-        // Advance to next non-air & matching target if current is invalid
+        // Show particles periodically for area & upcoming targets
+        if (showParticles.get() && tickCounter % particleIntervalTicks.get() == 0) {
+            spawnAreaParticles();
+            spawnTargetParticles();
+        }
+
+        // Get current target and validate
         BlockPos target = targets.get(currentTargetIndex);
         if (mc.world.getBlockState(target).isAir() || !shouldMineTarget(target)) {
             currentTargetIndex++;
@@ -235,32 +265,42 @@ public class AutoMiner extends Module {
             return;
         }
 
-        // Move to within reach
+        // Move only if needed (distance > reach)
         double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(target));
         if (dist > reach.get()) {
-            // walk towards block center
+            // Point toward block center and walk forward until within reach
             Vec3d dir = Vec3d.ofCenter(target).subtract(mc.player.getPos()).normalize();
             double yaw = Math.toDegrees(Math.atan2(-dir.x, dir.z));
             double pitch = Math.toDegrees(-Math.asin(dir.y));
             smoothLook(yaw, pitch);
+
+            // occasionally do small human-like strafes
+            if (rnd.nextInt(100) < 6) {
+                // small left/right step for humanization
+                boolean left = rnd.nextBoolean();
+                KeyBinding.setKeyPressed(left ? mc.options.leftKey.getDefaultKey() : mc.options.rightKey.getDefaultKey(), true);
+                // schedule to release next tick (we'll simply not hold in long time so it's fine)
+            }
+
             KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), true);
-            // Do not attempt to mine until within reach
             return;
         } else {
+            // within reach: stop movement keys
             KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), false);
+            KeyBinding.setKeyPressed(mc.options.leftKey.getDefaultKey(), false);
+            KeyBinding.setKeyPressed(mc.options.rightKey.getDefaultKey(), false);
         }
 
-        // Sneak option
+        // sneak option
         KeyBinding.setKeyPressed(mc.options.sneakKey.getDefaultKey(), useSneakWhenMining.get());
 
-        // Look at block center and start/continue breaking
+        // look at block center and break
         Vec3d center = Vec3d.ofCenter(target);
         double dx = center.x - mc.player.getX();
         double dz = center.z - mc.player.getZ();
         double dy = center.y - (mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose()));
         float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90f;
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
-
         smoothLook(yaw, pitch);
 
         // If currently in break-hold, continue
@@ -269,10 +309,7 @@ public class AutoMiner extends Module {
             breakHoldTicksLeft--;
             if (breakHoldTicksLeft == 0) {
                 KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), false);
-                // small random delay before considering block broken
-                int pause = rnd.nextInt(1 + breakRandomness.get());
-                // avoid Thread.sleep in tick loop; simulate short pause by skipping a tick or two:
-                // We'll simply advance index and let next tick validate if block is air.
+                // advance to next target and let the world update confirm air next tick
                 currentTargetIndex++;
             }
             return;
@@ -285,10 +322,42 @@ public class AutoMiner extends Module {
             return;
         }
 
-        // Start a new break action
+        // Begin break action with randomized hold
         int tickHold = baseBreakTicks.get() + rnd.nextInt(breakRandomness.get() + 1);
         breakHoldTicksLeft = Math.max(1, tickHold);
         KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
+    }
+
+    // Particle helpers (cheap visual feedback across versions)
+    private void spawnAreaParticles() {
+        if (min == null || max == null || mc.world == null) return;
+        // spawn small particles at the 8 corners (gentle highlight)
+        spawnParticleAt(min);
+        spawnParticleAt(new BlockPos(min.getX(), min.getY(), max.getZ()));
+        spawnParticleAt(new BlockPos(min.getX(), max.getY(), min.getZ()));
+        spawnParticleAt(new BlockPos(min.getX(), max.getY(), max.getZ()));
+        spawnParticleAt(new BlockPos(max.getX(), min.getY(), min.getZ()));
+        spawnParticleAt(new BlockPos(max.getX(), min.getY(), max.getZ()));
+        spawnParticleAt(new BlockPos(max.getX(), max.getY(), min.getZ()));
+        spawnParticleAt(max);
+    }
+
+    private void spawnTargetParticles() {
+        if (mc.world == null) return;
+        int count = Math.min(highlightTargets.get(), targets.size() - currentTargetIndex);
+        for (int i = 0; i < count; i++) {
+            BlockPos p = targets.get(currentTargetIndex + i);
+            spawnParticleAt(BlockPos.of(p.getX(), p.getY(), p.getZ()));
+        }
+    }
+
+    private void spawnParticleAt(BlockPos pos) {
+        if (mc.world == null) return;
+        double x = pos.getX() + 0.5;
+        double y = pos.getY() + 0.5;
+        double z = pos.getZ() + 0.5;
+        // small stationary end-rod-like particle
+        mc.world.addParticle(ParticleTypes.END_ROD, x, y, z, 0.0, 0.0, 0.0);
     }
 
     // Smoothly rotate player toward yaw/pitch at configured speed
@@ -301,7 +370,6 @@ public class AutoMiner extends Module {
             return;
         }
 
-        // clamp
         float curYaw = mc.player.getYaw();
         float curPitch = mc.player.getPitch();
         double maxChange = rotateSpeed.get();
@@ -444,6 +512,8 @@ public class AutoMiner extends Module {
         KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), false);
         KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), false);
         KeyBinding.setKeyPressed(mc.options.sneakKey.getDefaultKey(), false);
+        KeyBinding.setKeyPressed(mc.options.leftKey.getDefaultKey(), false);
+        KeyBinding.setKeyPressed(mc.options.rightKey.getDefaultKey(), false);
     }
 
     // Modes
