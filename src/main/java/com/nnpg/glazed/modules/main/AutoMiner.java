@@ -469,6 +469,13 @@ public class AutoMiner extends Module {
         KeyBinding.setKeyPressed(mc.options.rightKey.getDefaultKey(), false);
     }
 
+    // ✅ Added helper to stop only movement keys
+    private void stopMovement() {
+        KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), false);
+        KeyBinding.setKeyPressed(mc.options.leftKey.getDefaultKey(), false);
+        KeyBinding.setKeyPressed(mc.options.rightKey.getDefaultKey(), false);
+    }
+
     private void stop(String message) {
         ChatUtils.warning(message);
         toggle();
