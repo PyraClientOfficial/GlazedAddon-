@@ -7,7 +7,6 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.option.KeyBinding;
-import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.PickaxeItem;
 import net.minecraft.particle.ParticleTypes;
@@ -156,6 +155,7 @@ public class AutoMiner extends Module {
     private int breakHoldTicksLeft = 0;
     private final Random rnd = ThreadLocalRandom.current();
     private int tickCounter = 0;
+    private boolean walking = false;
 
     public AutoMiner() {
         super(GlazedAddon.CATEGORY, "auto-miner", "Mines a defined cuboid area intelligently.");
@@ -174,10 +174,13 @@ public class AutoMiner extends Module {
         mining = true;
         breakHoldTicksLeft = 0;
         tickCounter = 0;
+        walking = false;
 
         if (showArea.get()) {
             ChatUtils.info(String.format("[AutoMiner] Area: min=%s max=%s total=%d",
                 min.toShortString(), max.toShortString(), targets.size()));
+        } else {
+            ChatUtils.info("[AutoMiner] Started.");
         }
     }
 
@@ -195,17 +198,15 @@ public class AutoMiner extends Module {
         tickCounter++;
 
         // Safety
-        if (stopOnHurt.get() && mc.player.hurtTime > 0) stop("[AutoMiner] Stopped: player took damage.");
-        if (mc.player.getHealth() <= healthThreshold.get()) stop("[AutoMiner] Stopped: low health.");
-        if (stopIfInventoryFull.get() && isInventoryFull()) stop("[AutoMiner] Stopped: inventory full.");
+        if (stopOnHurt.get() && mc.player.hurtTime > 0) { stop("[AutoMiner] Stopped: player took damage."); return; }
+        if (mc.player.getHealth() <= healthThreshold.get()) { stop("[AutoMiner] Stopped: low health."); return; }
+        if (stopIfInventoryFull.get() && isInventoryFull()) { stop("[AutoMiner] Stopped: inventory full."); return; }
 
         // Rebuild targets if done
         if (currentTargetIndex >= targets.size()) {
-            if (isAreaCleared()) stop("[AutoMiner] Area cleared.");
-            else {
-                buildTargetList();
-                currentTargetIndex = 0;
-            }
+            if (isAreaCleared()) { stop("[AutoMiner] Area cleared."); return; }
+            buildTargetList();
+            currentTargetIndex = 0;
             return;
         }
 
@@ -216,30 +217,46 @@ public class AutoMiner extends Module {
         }
 
         BlockPos target = targets.get(currentTargetIndex);
+
+        // Skip if already air or doesn't match filter
         if (mc.world.getBlockState(target).isAir() || !shouldMineTarget(target)) {
             currentTargetIndex++;
+            breakHoldTicksLeft = 0;
             return;
         }
 
         double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(target));
+
+        // Walk only when needed (outside reach)
         if (dist > reach.get()) {
             moveToward(target);
             return;
-        } else stopMovement();
+        } else {
+            stopMovement();
+        }
 
+        // Face target
         lookAt(target);
 
+        // Sneak while mining if enabled
+        KeyBinding.setKeyPressed(mc.options.sneakKey.getDefaultKey(), useSneakWhenMining.get());
+
+        // Continue break hold if present
         if (breakHoldTicksLeft > 0) {
             KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
             breakHoldTicksLeft--;
             if (breakHoldTicksLeft == 0) {
                 KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), false);
+                // Let next tick validate block is gone; advance index to avoid re-holding same block
                 currentTargetIndex++;
             }
             return;
         }
 
-        if (!hasValidTool()) stop("[AutoMiner] No pickaxe found.");
+        // Ensure we have a pickaxe
+        if (!hasValidTool()) { stop("[AutoMiner] No pickaxe found."); return; }
+
+        // Start new break action with randomization
         breakHoldTicksLeft = baseBreakTicks.get() + rnd.nextInt(breakRandomness.get() + 1);
         KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
     }
@@ -260,7 +277,7 @@ public class AutoMiner extends Module {
 
     private void spawnTargetParticles() {
         if (mc.world == null) return;
-        int count = Math.min(highlightTargets.get(), targets.size() - currentTargetIndex);
+        int count = Math.min(highlightTargets.get(), Math.max(0, targets.size() - currentTargetIndex));
         for (int i = 0; i < count; i++) {
             BlockPos p = targets.get(currentTargetIndex + i);
             spawnParticleAt(new BlockPos(p.getX(), p.getY(), p.getZ()));
@@ -280,19 +297,27 @@ public class AutoMiner extends Module {
         double pitch = Math.toDegrees(-Math.asin(dir.y));
         smoothLook(yaw, pitch);
         KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), true);
+        walking = true;
+
+        // occasional short strafe for humanization
+        if (rnd.nextInt(100) < 6) {
+            boolean left = rnd.nextBoolean();
+            KeyBinding.setKeyPressed(left ? mc.options.leftKey.getDefaultKey() : mc.options.rightKey.getDefaultKey(), true);
+        }
     }
 
     private void stopMovement() {
         KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), false);
         KeyBinding.setKeyPressed(mc.options.leftKey.getDefaultKey(), false);
         KeyBinding.setKeyPressed(mc.options.rightKey.getDefaultKey(), false);
+        walking = false;
     }
 
     private void lookAt(BlockPos target) {
         Vec3d center = Vec3d.ofCenter(target);
         double dx = center.x - mc.player.getX();
         double dz = center.z - mc.player.getZ();
-        double dy = center.y - (mc.player.getY() + mc.player.getEyeHeight(mc.player.getPose()));
+        double dy = center.y - mc.player.getEyeY();
         float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90f;
         float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
         smoothLook(yaw, pitch);
@@ -357,8 +382,7 @@ public class AutoMiner extends Module {
             for (int x = min.getX(); x <= max.getX(); x++) {
                 for (int z = min.getZ(); z <= max.getZ(); z++) {
                     BlockPos p = new BlockPos(x, y, z);
-                    if (!mc.world.getBlockState(p).isAir() && shouldMineTarget(p))
-                        targets.add(p);
+                    if (!mc.world.getBlockState(p).isAir() && shouldMineTarget(p)) targets.add(p);
                 }
             }
         }
