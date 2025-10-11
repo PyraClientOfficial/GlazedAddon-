@@ -1,12 +1,12 @@
-package com.nnpg.glazed.modules.misc;
+package com.nnpg.glazed.modules.main;
 
 import com.nnpg.glazed.GlazedAddon;
-import meteordevelopment.meteorclient.events.render.RenderGameOverlayEvent;
-import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.gui.hud.InGameHud;
+
+import java.util.List;
 
 public class FakeStats extends Module {
     private final SettingGroup sgGeneral = settings.createGroup("General");
@@ -43,23 +43,17 @@ public class FakeStats extends Module {
     }
 
     @EventHandler
-    private void onRenderScoreboard(RenderGameOverlayEvent event) {
-        // Replace the stats in the client scoreboard rendering
-        // Only client-side changes, server unaffected
-        // This example modifies the scoreboard text as it's rendered
+    private void onHudRender(net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback event) {
+        InGameHud hud = event.getHud();
+        if (hud == null) return;
 
-        if (!(event instanceof RenderGameOverlayEvent.Text textEvent)) return;
-
-        for (int i = 0; i < textEvent.lines.size(); i++) {
-            String line = textEvent.lines.get(i);
-
-            if (line.contains("Kills:")) {
-                textEvent.lines.set(i, "Kills: " + kills.get());
-            } else if (line.contains("Deaths:")) {
-                textEvent.lines.set(i, "Deaths: " + deaths.get());
-            } else if (line.contains("Coins:")) {
-                textEvent.lines.set(i, "Coins: " + coins.get());
-            }
+        // Grab the scoreboard text lines and replace them client-side
+        List<String> lines = hud.getScoreboard().getLines();
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i);
+            if (line.contains("Kills:")) lines.set(i, "Kills: " + kills.get());
+            else if (line.contains("Deaths:")) lines.set(i, "Deaths: " + deaths.get());
+            else if (line.contains("Coins:")) lines.set(i, "Coins: " + coins.get());
         }
     }
 }
