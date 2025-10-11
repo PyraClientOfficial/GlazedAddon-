@@ -16,6 +16,7 @@ import net.minecraft.block.Blocks;
 import net.minecraft.state.property.Properties;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
+import net.minecraft.util.math.Direction; // <-- Required import
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.WorldChunk;
