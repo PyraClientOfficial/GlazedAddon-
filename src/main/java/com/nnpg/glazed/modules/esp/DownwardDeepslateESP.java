@@ -16,7 +16,6 @@ import net.minecraft.block.Blocks;
 import net.minecraft.state.property.Properties;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.WorldChunk;
@@ -110,23 +109,19 @@ public class DownwardDeepslateESP extends Module {
     private ExecutorService threadPool;
 
     public DownwardDeepslateESP() {
-        super(GlazedAddon.esp, "DownwardDeepslateESP", "ESP for deepslate blocks rotated facing down.");
+        super(GlazedAddon.esp, "DownwardDeepslateESP", "ESP for downward-facing chiseled deepslate blocks.");
     }
 
     @Override
     public void onActivate() {
         if (mc.world == null) return;
-
         if (useThreading.get()) threadPool = Executors.newFixedThreadPool(threadPoolSize.get());
         downwardDeepslatePositions.clear();
 
-        if (useThreading.get()) {
-            for (Chunk chunk : Utils.chunks()) {
-                if (chunk instanceof WorldChunk worldChunk) threadPool.submit(() -> scanChunk(worldChunk));
-            }
-        } else {
-            for (Chunk chunk : Utils.chunks()) {
-                if (chunk instanceof WorldChunk worldChunk) scanChunk(worldChunk);
+        for (Chunk chunk : Utils.chunks()) {
+            if (chunk instanceof WorldChunk worldChunk) {
+                if (useThreading.get()) threadPool.submit(() -> scanChunk(worldChunk));
+                else scanChunk(worldChunk);
             }
         }
     }
@@ -142,11 +137,8 @@ public class DownwardDeepslateESP extends Module {
 
     @EventHandler
     private void onChunkLoad(ChunkDataEvent event) {
-        if (useThreading.get() && threadPool != null && !threadPool.isShutdown()) {
-            threadPool.submit(() -> scanChunk(event.chunk()));
-        } else {
-            scanChunk(event.chunk());
-        }
+        if (useThreading.get() && threadPool != null && !threadPool.isShutdown()) threadPool.submit(() -> scanChunk(event.chunk()));
+        else scanChunk(event.chunk());
     }
 
     @EventHandler
@@ -154,21 +146,20 @@ public class DownwardDeepslateESP extends Module {
         BlockPos pos = event.pos;
         BlockState state = event.newState;
 
-        Runnable updateTask = () -> {
-            boolean isDownward = isDownwardDeepslate(state, pos.getY());
-            if (isDownward) {
+        Runnable task = () -> {
+            boolean downward = isDownwardDeepslate(state);
+            if (downward) {
                 boolean added = downwardDeepslatePositions.add(pos);
                 if (added && deepslateChat.get() && (!useThreading.get() || !limitChatSpam.get())) {
-                    String blockType = getBlockTypeName(state);
-                    info("§3[§bDown Deepslate§3] §b" + blockType + " at " + pos.toShortString());
+                    info("§3[§bDown Deepslate§3] §bChiseled Deepslate at " + pos.toShortString());
                 }
             } else {
                 downwardDeepslatePositions.remove(pos);
             }
         };
 
-        if (useThreading.get() && threadPool != null && !threadPool.isShutdown()) threadPool.submit(updateTask);
-        else updateTask.run();
+        if (useThreading.get() && threadPool != null && !threadPool.isShutdown()) threadPool.submit(task);
+        else task.run();
     }
 
     private void scanChunk(Chunk chunk) {
@@ -179,79 +170,46 @@ public class DownwardDeepslateESP extends Module {
         int yMin = Math.max(chunk.getBottomY(), minY.get());
         int yMax = Math.min(chunk.getBottomY() + chunk.getHeight(), maxY.get());
 
-        Set<BlockPos> chunkDownwardDeepslate = new HashSet<>();
+        Set<BlockPos> chunkPositions = new HashSet<>();
 
         for (int x = xStart; x < xStart + 16; x++) {
             for (int z = zStart; z < zStart + 16; z++) {
                 for (int y = yMin; y < yMax; y++) {
                     BlockPos pos = new BlockPos(x, y, z);
                     BlockState state = chunk.getBlockState(pos);
-                    if (isDownwardDeepslate(state, y)) chunkDownwardDeepslate.add(pos);
+                    if (isDownwardDeepslate(state)) chunkPositions.add(pos);
                 }
             }
         }
 
-        downwardDeepslatePositions.removeIf(pos -> new ChunkPos(pos).equals(cpos) && !chunkDownwardDeepslate.contains(pos));
-        downwardDeepslatePositions.addAll(chunkDownwardDeepslate);
+        downwardDeepslatePositions.removeIf(pos -> new ChunkPos(pos).equals(cpos) && !chunkPositions.contains(pos));
+        downwardDeepslatePositions.addAll(chunkPositions);
     }
 
-    private boolean isDownwardDeepslate(BlockState state, int y) {
-        if (y < minY.get() || y > maxY.get()) return false;
-        if (!state.contains(Properties.AXIS)) return false;
-
-        // Only rotated blocks along X or Z axis (upside-down / player-placed)
-        Direction.Axis axis = state.get(Properties.AXIS);
-        if (axis == Direction.Axis.Y) return false;
-
-        return state.isOf(Blocks.DEEPSLATE) ||
-               state.isOf(Blocks.POLISHED_DEEPSLATE) ||
-               state.isOf(Blocks.DEEPSLATE_BRICKS) ||
-               state.isOf(Blocks.DEEPSLATE_TILES) ||
-               state.isOf(Blocks.CHISELED_DEEPSLATE);
-    }
-
-    private String getBlockTypeName(BlockState state) {
-        if (state.isOf(Blocks.DEEPSLATE)) return "Downward Deepslate";
-        if (state.isOf(Blocks.POLISHED_DEEPSLATE)) return "Downward Polished Deepslate";
-        if (state.isOf(Blocks.DEEPSLATE_BRICKS)) return "Downward Deepslate Bricks";
-        if (state.isOf(Blocks.DEEPSLATE_TILES)) return "Downward Deepslate Tiles";
-        if (state.isOf(Blocks.CHISELED_DEEPSLATE)) return "Downward Chiseled Deepslate";
-        return "Downward Deepslate Block";
+    private boolean isDownwardDeepslate(BlockState state) {
+        if (!state.isOf(Blocks.CHISELED_DEEPSLATE)) return false;
+        if (!state.contains(Properties.FACING)) return false;
+        return state.get(Properties.FACING) == Direction.DOWN;
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
         if (mc.player == null) return;
-
         Vec3d playerPos = mc.player.getLerpedPos(event.tickDelta);
         Color side = new Color(deepslateColor.get());
         Color outline = new Color(deepslateColor.get());
         Color tracerCol = new Color(tracerColor.get());
 
         for (BlockPos pos : downwardDeepslatePositions) {
-            // ESP box
             event.renderer.box(pos, side, outline, deepslateShapeMode.get(), 0);
 
-            // Clean and accurate tracers
             if (tracers.get()) {
                 Vec3d blockCenter = Vec3d.ofCenter(pos);
-                Vec3d startPos;
-
-                if (mc.options.getPerspective().isFirstPerson()) {
-                    Vec3d lookDir = mc.player.getRotationVector();
-                    startPos = new Vec3d(
-                        playerPos.x + lookDir.x * 0.5,
-                        playerPos.y + mc.player.getEyeHeight(mc.player.getPose()) + lookDir.y * 0.5,
-                        playerPos.z + lookDir.z * 0.5
-                    );
-                } else {
-                    startPos = new Vec3d(
-                        playerPos.x,
-                        playerPos.y + mc.player.getEyeHeight(mc.player.getPose()),
-                        playerPos.z
-                    );
-                }
-
+                Vec3d startPos = new Vec3d(
+                    playerPos.x,
+                    playerPos.y + mc.player.getEyeHeight(mc.player.getPose()),
+                    playerPos.z
+                );
                 event.renderer.line(startPos.x, startPos.y, startPos.z, blockCenter.x, blockCenter.y, blockCenter.z, tracerCol);
             }
         }
