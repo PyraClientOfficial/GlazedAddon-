@@ -12,21 +12,14 @@ import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.state.property.DirectionProperty;
 import net.minecraft.state.property.Properties;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.chunk.Chunk;
+import net.minecraft.util.math.*;
 import net.minecraft.world.chunk.WorldChunk;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.*;
 
 public class DownwardDeepslateESP extends Module {
     private final SettingGroup sgGeneral = settings.createGroup("General");
@@ -66,97 +59,95 @@ public class DownwardDeepslateESP extends Module {
 
     private final Setting<Integer> minY = sgRange.add(new IntSetting.Builder()
         .name("min-y")
-        .description("Minimum Y level to scan.")
         .defaultValue(-64)
-        .min(-64)
-        .max(320)
-        .sliderRange(-64, 320)
+        .min(-64).max(320).sliderRange(-64, 320)
         .build());
 
     private final Setting<Integer> maxY = sgRange.add(new IntSetting.Builder()
         .name("max-y")
-        .description("Maximum Y level to scan.")
         .defaultValue(128)
-        .min(-64)
-        .max(320)
-        .sliderRange(-64, 320)
+        .min(-64).max(320).sliderRange(-64, 320)
         .build());
 
     private final SettingGroup sgThreading = settings.createGroup("Threading");
 
     private final Setting<Boolean> useThreading = sgThreading.add(new BoolSetting.Builder()
         .name("enable-threading")
-        .description("Use multi-threading for chunk scanning.")
         .defaultValue(true)
         .build());
 
     private final Setting<Integer> threadPoolSize = sgThreading.add(new IntSetting.Builder()
         .name("thread-pool-size")
-        .description("Number of threads to use.")
         .defaultValue(2)
-        .min(1)
-        .max(8)
+        .min(1).max(8)
         .sliderRange(1, 8)
         .visible(useThreading::get)
         .build());
 
     // Storage
-    private final Set<BlockPos> downwardDeepslatePositions = ConcurrentHashMap.newKeySet();
+    private final Set<BlockPos> downwardDeepslatePositions = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private ExecutorService threadPool;
 
     public DownwardDeepslateESP() {
-        super(GlazedAddon.esp, "DownwardDeepslateESP", "Highlights deepslate blocks that are facing downward.");
+        super(GlazedAddon.esp, "downward-deepslate-esp", "Highlights deepslate blocks that are facing downward.");
     }
 
     @Override
     public void onActivate() {
         if (mc.world == null) return;
+
         downwardDeepslatePositions.clear();
 
-        if (useThreading.get()) threadPool = Executors.newFixedThreadPool(threadPoolSize.get());
+        if (useThreading.get()) {
+            threadPool = Executors.newFixedThreadPool(threadPoolSize.get());
+        }
 
-        for (Chunk chunk : Utils.chunks()) {
+        // Run async scan for loaded chunks
+        for (var chunk : Utils.chunks()) {
             if (chunk instanceof WorldChunk worldChunk) {
-                Runnable task = () -> scanChunk(worldChunk);
-                if (useThreading.get()) threadPool.submit(task);
-                else task.run();
+                submitScan(worldChunk);
             }
         }
     }
 
     @Override
     public void onDeactivate() {
-        if (threadPool != null && !threadPool.isShutdown()) {
-            threadPool.shutdown();
+        downwardDeepslatePositions.clear();
+
+        if (threadPool != null) {
+            threadPool.shutdownNow();
             threadPool = null;
         }
-        downwardDeepslatePositions.clear();
+    }
+
+    private void submitScan(WorldChunk chunk) {
+        Runnable scanTask = () -> scanChunk(chunk);
+
+        if (useThreading.get() && threadPool != null && !threadPool.isShutdown()) {
+            threadPool.submit(scanTask);
+        } else {
+            scanTask.run();
+        }
     }
 
     @EventHandler
     private void onChunkLoad(ChunkDataEvent event) {
-        Runnable task = () -> scanChunk(event.chunk());
-        if (useThreading.get() && threadPool != null && !threadPool.isShutdown()) threadPool.submit(task);
-        else task.run();
+        if (mc.world == null) return;
+        submitScan(event.chunk());
     }
 
     @EventHandler
     private void onBlockUpdate(BlockUpdateEvent event) {
-        Runnable task = () -> {
-            BlockPos pos = event.pos;
-            BlockState state = event.newState;
+        BlockPos pos = event.pos;
+        BlockState newState = event.newState;
 
-            if (isDownwardDeepslate(state, pos.getY())) {
-                if (downwardDeepslatePositions.add(pos) && chat.get()) {
-                    info("§b[Downward Deepslate] Found at " + pos.toShortString());
-                }
-            } else {
-                downwardDeepslatePositions.remove(pos);
+        if (isDownwardDeepslate(newState, pos.getY())) {
+            if (downwardDeepslatePositions.add(pos) && chat.get()) {
+                info("§b[Downward Deepslate] Found at " + pos.toShortString());
             }
-        };
-
-        if (useThreading.get() && threadPool != null && !threadPool.isShutdown()) threadPool.submit(task);
-        else task.run();
+        } else {
+            downwardDeepslatePositions.remove(pos);
+        }
     }
 
     private void scanChunk(WorldChunk chunk) {
@@ -164,63 +155,56 @@ public class DownwardDeepslateESP extends Module {
         int yMin = Math.max(chunk.getBottomY(), minY.get());
         int yMax = Math.min(chunk.getBottomY() + chunk.getHeight(), maxY.get());
 
-        Set<BlockPos> chunkFound = new HashSet<>();
+        Set<BlockPos> found = new HashSet<>();
 
-        for (int x = cpos.getStartX(); x < cpos.getStartX() + 16; x++) {
-            for (int z = cpos.getStartZ(); z < cpos.getStartZ() + 16; z++) {
-                for (int y = yMin; y < yMax; y++) {
-                    BlockPos pos = new BlockPos(x, y, z);
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                for (int y = yMax; y >= yMin; y--) { // Top-down for consistency
+                    BlockPos pos = new BlockPos(cpos.getStartX() + x, y, cpos.getStartZ() + z);
                     BlockState state = chunk.getBlockState(pos);
+
                     if (isDownwardDeepslate(state, y)) {
-                        chunkFound.add(pos);
+                        found.add(pos);
                     }
                 }
             }
         }
 
-        downwardDeepslatePositions.removeIf(pos -> {
-            ChunkPos cp = new ChunkPos(pos);
-            return cp.equals(cpos) && !chunkFound.contains(pos);
-        });
-
-        downwardDeepslatePositions.addAll(chunkFound);
+        downwardDeepslatePositions.removeIf(p -> new ChunkPos(p).equals(cpos) && !found.contains(p));
+        downwardDeepslatePositions.addAll(found);
     }
 
     private boolean isDownwardDeepslate(BlockState state, int y) {
         if (y < minY.get() || y > maxY.get()) return false;
+        String blockName = state.getBlock().toString().toLowerCase();
 
-        // Only process deepslate-related blocks
-        if (!(state.getBlock().toString().toLowerCase().contains("deepslate"))) return false;
+        if (!blockName.contains("deepslate")) return false;
 
-        // Check for facing/down
-        if (state.contains(Properties.FACING)) {
-            Direction facing = state.get(Properties.FACING);
-            return facing == Direction.DOWN;
-        }
+        if (state.contains(Properties.FACING))
+            return state.get(Properties.FACING) == Direction.DOWN;
 
-        // Some blocks might use AXIS instead of FACING (e.g. pillars)
-        if (state.contains(Properties.AXIS)) {
-            Direction.Axis axis = state.get(Properties.AXIS);
-            return axis == Direction.Y; // vertical
-        }
+        if (state.contains(Properties.AXIS))
+            return state.get(Properties.AXIS) == Direction.Axis.Y;
 
         return false;
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
+        if (downwardDeepslatePositions.isEmpty()) return;
+
         Vec3d playerPos = mc.player.getLerpedPos(event.tickDelta);
         Color side = new Color(color.get());
         Color outline = new Color(color.get());
         Color tracerCol = new Color(tracerColor.get());
 
-        for (BlockPos pos : downwardDeepslatePositions) {
+        for (BlockPos pos : Set.copyOf(downwardDeepslatePositions)) {
             event.renderer.box(pos, side, outline, shapeMode.get(), 0);
 
             if (tracers.get()) {
                 Vec3d blockCenter = Vec3d.ofCenter(pos);
-                Vec3d start = playerPos.add(0, mc.player.getEyeHeight(mc.player.getPose()), 0);
-                event.renderer.line(start.x, start.y, start.z, blockCenter.x, blockCenter.y, blockCenter.z, tracerCol);
+                Vec3d eyePos = playerPos.add(0, mc.player.getEyeHeight(mc.player.getPose()), 0);
+                event.renderer.line(eyePos.x, eyePos.y, eyePos.z, blockCenter.x, blockCenter.y, blockCenter.z, tracerCol);
             }
         }
     }
