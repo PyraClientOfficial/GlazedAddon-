@@ -12,11 +12,21 @@ import net.minecraft.item.PickaxeItem;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.block.Blocks;
 
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.Locale;
 
+/**
+ * AutoMiner (fixed)
+ *
+ * - Mines only inside the specified cuboid (corner A/B)
+ * - Mines layer-by-layer (top-down)
+ * - Rotates to face block, waits until rotation is completed, then walks if needed
+ * - Breaks blocks until the entire area is air (skips bedrock)
+ * - Visual particles to highlight corners and upcoming targets
+ */
 public class AutoMiner extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgArea = settings.createGroup("Area");
@@ -38,24 +48,9 @@ public class AutoMiner extends Module {
         .build()
     );
 
-    private final Setting<Mode> mode = sgBehavior.add(new EnumSetting.Builder<Mode>()
-        .name("mode")
-        .description("Which blocks to mine")
-        .defaultValue(Mode.ALL)
-        .build()
-    );
-
-    private final Setting<List<String>> customBlocks = sgBehavior.add(new StringListSetting.Builder()
-        .name("custom-blocks")
-        .description("If mode=CUSTOM, these block names will be mined.")
-        .defaultValue(new ArrayList<>())
-        .visible(() -> mode.get() == Mode.CUSTOM)
-        .build()
-    );
-
     private final Setting<Double> reach = sgBehavior.add(new DoubleSetting.Builder()
         .name("reach")
-        .description("Distance to target block")
+        .description("Distance to target block to start mining")
         .defaultValue(4.5)
         .min(1.0)
         .max(6.0)
@@ -65,6 +60,7 @@ public class AutoMiner extends Module {
 
     private final Setting<Integer> baseBreakTicks = sgBehavior.add(new IntSetting.Builder()
         .name("base-break-ticks")
+        .description("Base ticks to hold attack to break block (randomized)")
         .defaultValue(6)
         .min(1)
         .max(200)
@@ -73,6 +69,7 @@ public class AutoMiner extends Module {
 
     private final Setting<Integer> breakRandomness = sgBehavior.add(new IntSetting.Builder()
         .name("break-randomness")
+        .description("Added random ticks to simulate human variation")
         .defaultValue(4)
         .min(0)
         .max(40)
@@ -81,12 +78,14 @@ public class AutoMiner extends Module {
 
     private final Setting<Boolean> rotateSmoothing = sgBehavior.add(new BoolSetting.Builder()
         .name("rotate-smoothing")
+        .description("Smooth rotations to look more human")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Double> rotateSpeed = sgBehavior.add(new DoubleSetting.Builder()
         .name("rotate-speed")
+        .description("How quickly to rotate towards a target (degrees per tick)")
         .defaultValue(20.0)
         .min(1.0)
         .max(180.0)
@@ -95,6 +94,7 @@ public class AutoMiner extends Module {
 
     private final Setting<Double> healthThreshold = sgSafety.add(new DoubleSetting.Builder()
         .name("stop-health")
+        .description("Stop mining if health drops below this value")
         .defaultValue(8.0)
         .min(0.0)
         .max(20.0)
@@ -103,36 +103,42 @@ public class AutoMiner extends Module {
 
     private final Setting<Boolean> stopOnHurt = sgSafety.add(new BoolSetting.Builder()
         .name("stop-on-hurt")
+        .description("Stop immediately if player is damaged")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Boolean> stopIfInventoryFull = sgSafety.add(new BoolSetting.Builder()
         .name("stop-if-inv-full")
+        .description("Stop if player's inventory becomes full")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Boolean> useSneakWhenMining = sgSafety.add(new BoolSetting.Builder()
         .name("sneak-when-mining")
+        .description("Sneak while mining to be safer (optional)")
         .defaultValue(false)
         .build()
     );
 
     private final Setting<Boolean> showArea = sgArea.add(new BoolSetting.Builder()
         .name("show-area")
+        .description("Print area coordinates in chat on start")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Boolean> showParticles = sgVisual.add(new BoolSetting.Builder()
         .name("show-particles")
+        .description("Use small particles to highlight area and next targets")
         .defaultValue(true)
         .build()
     );
 
     private final Setting<Integer> particleIntervalTicks = sgVisual.add(new IntSetting.Builder()
         .name("particle-interval")
+        .description("Ticks between particle updates")
         .defaultValue(6)
         .min(1)
         .max(40)
@@ -141,12 +147,14 @@ public class AutoMiner extends Module {
 
     private final Setting<Integer> highlightTargets = sgVisual.add(new IntSetting.Builder()
         .name("highlight-targets")
+        .description("How many upcoming targets to mark with particles")
         .defaultValue(6)
         .min(0)
         .max(64)
         .build()
     );
 
+    // runtime
     private BlockPos min = null;
     private BlockPos max = null;
     private final List<BlockPos> targets = new ArrayList<>();
@@ -155,10 +163,15 @@ public class AutoMiner extends Module {
     private int breakHoldTicksLeft = 0;
     private final Random rnd = ThreadLocalRandom.current();
     private int tickCounter = 0;
-    private boolean walking = false;
+
+    // rotation/movement gating
+    private double desiredYaw = 0;
+    private double desiredPitch = 0;
+    private boolean waitingForRotation = false; // wait until facing before move/break
+    private final double ROTATION_EPS = 3.0; // degrees tolerance
 
     public AutoMiner() {
-        super(GlazedAddon.CATEGORY, "auto-miner", "Mines a defined cuboid area intelligently.");
+        super(GlazedAddon.CATEGORY, "auto-miner", "Layered area miner — mines everything in the cuboid except bedrock.");
     }
 
     @Override
@@ -174,11 +187,10 @@ public class AutoMiner extends Module {
         mining = true;
         breakHoldTicksLeft = 0;
         tickCounter = 0;
-        walking = false;
+        waitingForRotation = false;
 
         if (showArea.get()) {
-            ChatUtils.info(String.format("[AutoMiner] Area: min=%s max=%s total=%d",
-                min.toShortString(), max.toShortString(), targets.size()));
+            ChatUtils.info(String.format("[AutoMiner] Area: min=%s max=%s totalTargets=%d", min.toShortString(), max.toShortString(), targets.size()));
         } else {
             ChatUtils.info("[AutoMiner] Started.");
         }
@@ -218,27 +230,47 @@ public class AutoMiner extends Module {
 
         BlockPos target = targets.get(currentTargetIndex);
 
-        // Skip if already air or doesn't match filter
+        // Skip if already air or bedrock or otherwise ignored
         if (mc.world.getBlockState(target).isAir() || !shouldMineTarget(target)) {
             currentTargetIndex++;
             breakHoldTicksLeft = 0;
+            waitingForRotation = false;
             return;
         }
 
         double dist = mc.player.getPos().distanceTo(Vec3d.ofCenter(target));
 
-        // Walk only when needed (outside reach)
+        // If outside reach, rotate first — then only move when facing desired angle
+        computeDesiredLook(target);
+        if (waitingForRotation) {
+            // rotate gradually; movement will start once facing within tolerance
+            smoothLook(desiredYaw, desiredPitch);
+            if (isFacingDesired()) {
+                waitingForRotation = false;
+            } else {
+                // while rotating, ensure player isn't moving forward
+                stopMovement();
+                return;
+            }
+        }
+
         if (dist > reach.get()) {
-            moveToward(target);
+            // we are facing desired yaw/pitch (waitingForRotation == false)
+            // start moving forward (humanize occasionally with tiny strafes)
+            smoothLook(desiredYaw, desiredPitch); // keep facing while walking
+            KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), true);
+
+            if (rnd.nextInt(100) < 6) {
+                boolean left = rnd.nextBoolean();
+                KeyBinding.setKeyPressed(left ? mc.options.leftKey.getDefaultKey() : mc.options.rightKey.getDefaultKey(), true);
+            }
             return;
         } else {
+            // within reach: stop movement keys
             stopMovement();
         }
 
-        // Face target
-        lookAt(target);
-
-        // Sneak while mining if enabled
+        // Now within reach and facing target. Ensure sneak if chosen
         KeyBinding.setKeyPressed(mc.options.sneakKey.getDefaultKey(), useSneakWhenMining.get());
 
         // Continue break hold if present
@@ -247,7 +279,7 @@ public class AutoMiner extends Module {
             breakHoldTicksLeft--;
             if (breakHoldTicksLeft == 0) {
                 KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), false);
-                // Let next tick validate block is gone; advance index to avoid re-holding same block
+                // advance to next target; next tick will verify block removed
                 currentTargetIndex++;
             }
             return;
@@ -256,23 +288,43 @@ public class AutoMiner extends Module {
         // Ensure we have a pickaxe
         if (!hasValidTool()) { stop("[AutoMiner] No pickaxe found."); return; }
 
-        // Start new break action with randomization
+        // Start a new break action — but first ensure we are facing the exact desired angles
+        // If not facing yet, set waitingForRotation and return (we will rotate next tick)
+        if (!isFacingDesired()) {
+            waitingForRotation = true;
+            smoothLook(desiredYaw, desiredPitch);
+            return;
+        }
+
+        // Start break hold with some randomness
         breakHoldTicksLeft = baseBreakTicks.get() + rnd.nextInt(breakRandomness.get() + 1);
         KeyBinding.setKeyPressed(mc.options.attackKey.getDefaultKey(), true);
     }
 
+    // Compute the yaw/pitch to look at block center and set waitingForRotation flag
+    private void computeDesiredLook(BlockPos target) {
+        Vec3d center = Vec3d.ofCenter(target);
+        Vec3d dir = center.subtract(mc.player.getPos());
+        double yaw = Math.toDegrees(Math.atan2(-dir.x, dir.z));
+        double pitch = Math.toDegrees(-Math.asin(dir.y / Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z)));
+
+        desiredYaw = yaw;
+        desiredPitch = pitch;
+        waitingForRotation = true; // require rotation completion before moving/breaking
+    }
+
+    // Particle helpers (cheap visual feedback)
     private void spawnAreaParticles() {
         if (min == null || max == null || mc.world == null) return;
-        BlockPos[] corners = {
-            min, max,
-            new BlockPos(min.getX(), min.getY(), max.getZ()),
-            new BlockPos(min.getX(), max.getY(), min.getZ()),
-            new BlockPos(max.getX(), min.getY(), min.getZ()),
-            new BlockPos(max.getX(), max.getY(), min.getZ()),
-            new BlockPos(min.getX(), max.getY(), max.getZ()),
-            new BlockPos(max.getX(), min.getY(), max.getZ())
-        };
-        for (BlockPos pos : corners) spawnParticleAt(pos);
+        // corners
+        spawnParticleAt(min);
+        spawnParticleAt(new BlockPos(min.getX(), min.getY(), max.getZ()));
+        spawnParticleAt(new BlockPos(min.getX(), max.getY(), min.getZ()));
+        spawnParticleAt(new BlockPos(min.getX(), max.getY(), max.getZ()));
+        spawnParticleAt(new BlockPos(max.getX(), min.getY(), min.getZ()));
+        spawnParticleAt(new BlockPos(max.getX(), min.getY(), max.getZ()));
+        spawnParticleAt(new BlockPos(max.getX(), max.getY(), min.getZ()));
+        spawnParticleAt(max);
     }
 
     private void spawnTargetParticles() {
@@ -280,7 +332,7 @@ public class AutoMiner extends Module {
         int count = Math.min(highlightTargets.get(), Math.max(0, targets.size() - currentTargetIndex));
         for (int i = 0; i < count; i++) {
             BlockPos p = targets.get(currentTargetIndex + i);
-            spawnParticleAt(new BlockPos(p.getX(), p.getY(), p.getZ()));
+            spawnParticleAt(p);
         }
     }
 
@@ -291,42 +343,12 @@ public class AutoMiner extends Module {
             0.0, 0.0, 0.0);
     }
 
-    private void moveToward(BlockPos target) {
-        Vec3d dir = Vec3d.ofCenter(target).subtract(mc.player.getPos()).normalize();
-        double yaw = Math.toDegrees(Math.atan2(-dir.x, dir.z));
-        double pitch = Math.toDegrees(-Math.asin(dir.y));
-        smoothLook(yaw, pitch);
-        KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), true);
-        walking = true;
-
-        // occasional short strafe for humanization
-        if (rnd.nextInt(100) < 6) {
-            boolean left = rnd.nextBoolean();
-            KeyBinding.setKeyPressed(left ? mc.options.leftKey.getDefaultKey() : mc.options.rightKey.getDefaultKey(), true);
-        }
-    }
-
-    private void stopMovement() {
-        KeyBinding.setKeyPressed(mc.options.forwardKey.getDefaultKey(), false);
-        KeyBinding.setKeyPressed(mc.options.leftKey.getDefaultKey(), false);
-        KeyBinding.setKeyPressed(mc.options.rightKey.getDefaultKey(), false);
-        walking = false;
-    }
-
-    private void lookAt(BlockPos target) {
-        Vec3d center = Vec3d.ofCenter(target);
-        double dx = center.x - mc.player.getX();
-        double dz = center.z - mc.player.getZ();
-        double dy = center.y - mc.player.getEyeY();
-        float yaw = (float) Math.toDegrees(Math.atan2(dz, dx)) - 90f;
-        float pitch = (float) -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
-        smoothLook(yaw, pitch);
-    }
-
     private void smoothLook(double yawWanted, double pitchWanted) {
         if (!rotateSmoothing.get() || mc.player == null) {
-            mc.player.setYaw((float) yawWanted);
-            mc.player.setPitch((float) pitchWanted);
+            if (mc.player != null) {
+                mc.player.setYaw((float) yawWanted);
+                mc.player.setPitch((float) pitchWanted);
+            }
             return;
         }
 
@@ -337,12 +359,25 @@ public class AutoMiner extends Module {
         float yawDiff = wrapDegrees((float) (yawWanted - curYaw));
         float pitchDiff = (float) (pitchWanted - curPitch);
 
-        mc.player.setYaw(curYaw + clamp(yawDiff, (float) -maxChange, (float) maxChange));
-        mc.player.setPitch(curPitch + clamp(pitchDiff, (float) -maxChange, (float) maxChange));
+        float newYaw = curYaw + clamp(yawDiff, (float)-maxChange, (float)maxChange);
+        float newPitch = curPitch + clamp(pitchDiff, (float)-maxChange, (float)maxChange);
+
+        mc.player.setYaw(newYaw);
+        mc.player.setPitch(newPitch);
+    }
+
+    private boolean isFacingDesired() {
+        float curYaw = mc.player.getYaw();
+        float curPitch = mc.player.getPitch();
+        float yawDiff = Math.abs(wrapDegrees((float)(desiredYaw - curYaw)));
+        float pitchDiff = Math.abs((float)(desiredPitch - curPitch));
+        return yawDiff <= ROTATION_EPS && pitchDiff <= ROTATION_EPS;
     }
 
     private static float clamp(float v, float min, float max) {
-        return Math.max(min, Math.min(max, v));
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
     }
 
     private static float wrapDegrees(float deg) {
@@ -352,6 +387,7 @@ public class AutoMiner extends Module {
         return deg;
     }
 
+    // parse corner strings to BlockPos min/max
     private boolean parseCorners() {
         try {
             int[] a = parseCoordString(cornerA.get());
@@ -367,13 +403,14 @@ public class AutoMiner extends Module {
     private static int[] parseCoordString(String s) {
         String[] parts = s.trim().split(",");
         if (parts.length != 3) throw new IllegalArgumentException();
-        return new int[]{
+        return new int[] {
             Integer.parseInt(parts[0].trim()),
             Integer.parseInt(parts[1].trim()),
             Integer.parseInt(parts[2].trim())
         };
     }
 
+    // Build target list top-down, left-right, front-back (layer-by-layer)
     private void buildTargetList() {
         targets.clear();
         if (min == null || max == null || mc.world == null) return;
@@ -388,37 +425,12 @@ public class AutoMiner extends Module {
         }
     }
 
+    // Now: mine everything except bedrock
     private boolean shouldMineTarget(BlockPos pos) {
         if (mc.world == null) return false;
         var b = mc.world.getBlockState(pos).getBlock();
-
-        if (mode.get() == Mode.ALL) return true;
-        if (mode.get() == Mode.ORES) return isOreBlock(b);
-
-        if (mode.get() == Mode.CUSTOM) {
-            String name = b.getName().getString().toLowerCase(Locale.ROOT);
-            for (String s : customBlocks.get()) {
-                if (s != null && !s.trim().isEmpty()) {
-                    String t = s.trim().toLowerCase(Locale.ROOT);
-                    if (name.contains(t)) return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean isOreBlock(net.minecraft.block.Block b) {
-        return b == net.minecraft.block.Blocks.COAL_ORE ||
-               b == net.minecraft.block.Blocks.IRON_ORE ||
-               b == net.minecraft.block.Blocks.COPPER_ORE ||
-               b == net.minecraft.block.Blocks.GOLD_ORE ||
-               b == net.minecraft.block.Blocks.REDSTONE_ORE ||
-               b == net.minecraft.block.Blocks.LAPIS_ORE ||
-               b == net.minecraft.block.Blocks.DIAMOND_ORE ||
-               b == net.minecraft.block.Blocks.EMERALD_ORE ||
-               b == net.minecraft.block.Blocks.NETHER_QUARTZ_ORE ||
-               b == net.minecraft.block.Blocks.ANCIENT_DEBRIS ||
-               b == net.minecraft.block.Blocks.NETHER_GOLD_ORE;
+        if (b == Blocks.BEDROCK) return false; // never mine bedrock
+        return true;
     }
 
     private boolean isInventoryFull() {
@@ -438,11 +450,14 @@ public class AutoMiner extends Module {
 
     private boolean isAreaCleared() {
         if (min == null || max == null || mc.world == null) return true;
-        for (int x = min.getX(); x <= max.getX(); x++)
-            for (int y = min.getY(); y <= max.getY(); y++)
-                for (int z = min.getZ(); z <= max.getZ(); z++)
-                    if (!mc.world.getBlockState(new BlockPos(x, y, z)).isAir())
-                        return false;
+        for (int x = min.getX(); x <= max.getX(); x++) {
+            for (int y = min.getY(); y <= max.getY(); y++) {
+                for (int z = min.getZ(); z <= max.getZ(); z++) {
+                    BlockPos p = new BlockPos(x, y, z);
+                    if (!mc.world.getBlockState(p).isAir() && mc.world.getBlockState(p).getBlock() != Blocks.BEDROCK) return false;
+                }
+            }
+        }
         return true;
     }
 
@@ -457,9 +472,5 @@ public class AutoMiner extends Module {
     private void stop(String message) {
         ChatUtils.warning(message);
         toggle();
-    }
-
-    public enum Mode {
-        ALL, ORES, CUSTOM
     }
 }
